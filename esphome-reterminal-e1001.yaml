@@ -1,8 +1,7 @@
 # =============================================================================
-# reTerminal E1001 — ESPHome Full Hardware Example
-# All onboard peripherals enabled in the most basic way
-# reTerminal E1001 — ESPHome 全硬件基础示例
-# 以最基本的方式启用板载所有外设
+# reTerminal E1001 — ePaper dashboard
+# Pages: world clock / indoor+outdoor climate / 24 h temperature and
+# humidity graphs (history fetched from Home Assistant's REST API).
 # =============================================================================
 #
 # Hardware list / 硬件清单:
@@ -17,32 +16,42 @@
 #   9. MicroSD card slot (SPI + DET=15, EN=16)      / MicroSD 卡槽
 #  10. Deep sleep with button wake-up                / 深度睡眠 + 按钮唤醒
 #
+# Buttons: green = fetch history + redraw, right white = next page,
+#          left white = previous page. Any button wakes from deep sleep.
+#
 # Serial debug: UART0 via CH340K USB bridge
-# 串口调试：通过 CH340K USB 桥接芯片走 UART0
 # =============================================================================
 substitutions:
   device_name: reterminal-e1001
   friendly_name: "reTerminal_E1001"
+  ha_http_ip: !secret ha_http_ip
+  ha_api_token: !secret ha_api_token
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  includes:
+    - reterminal_epaper.h
+  # Arduino libs for the HA history fetch; ESPHome builds with the library
+  # dependency finder off, so they must be listed explicitly
+  libraries:
+    - WiFi
+    - WiFiClientSecure
+    - HTTPClient
   on_boot:
-    priority: 600
+    # -100 = everything is set up, so boot_flow may draw immediately
+    priority: -100
     then:
-      # Turn on SD card power rail / 打开 SD 卡供电
+      # Power rails / 打开供电
       - output.turn_on: bsp_sd_enable
-      # Turn on battery measurement circuit / 打开电池测量电路
       - output.turn_on: bsp_battery_enable
-      # Turn on microphone power / 打开麦克风供电
       - output.turn_on: mic_power_enable
-      # Wait for voltages to stabilize / 等待电压稳定
       - delay: 200ms
-      # Take first battery reading / 采集首次电池读数
       - component.update: battery_voltage
       - component.update: battery_level
-      # Read RTC time on boot / 启动时读取 RTC 时间
+      # Read RTC time before anything needs the clock / 启动时读取 RTC 时间
       - pcf8563.read_time:
+      - script.execute: boot_flow
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -60,16 +69,24 @@ logger:
 # Fonts / 字体
 # =============================================================================
 
+# Explicit glyph set: the default covers ASCII only, we need the degree sign
 font:
   - file: "gfonts://Inter@700"
     id: font_small
     size: 20
+    glyphs: &glyphs '!"%()+,-./0123456789:;=?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz °'
   - file: "gfonts://Inter@700"
     id: font_medium
     size: 32
+    glyphs: *glyphs
   - file: "gfonts://Inter@700"
     id: font_large
     size: 48
+    glyphs: *glyphs
+  - file: "gfonts://Inter@700"
+    id: font_huge
+    size: 72
+    glyphs: *glyphs
 
 # SPI — shared by ePaper display and SD card
 # SPI — 墨水屏和 SD 卡共用
@@ -88,8 +105,6 @@ i2c:
 
 # I2S audio bus — for the onboard PDM microphone
 # I2S 音频总线 — 用于板载 PDM 麦克风
-# i2s_lrclk_pin serves as the PDM clock output in PDM mode
-# PDM 模式下 i2s_lrclk_pin 充当 PDM 时钟输出
 i2s_audio:
   i2s_lrclk_pin: GPIO42
 
@@ -111,7 +126,6 @@ output:
     id: bsp_battery_enable
 
   # [3] Buzzer PWM output / 蜂鸣器 PWM 输出
-  # 'ledc' is ESP32 hardware PWM / 'ledc' 是 ESP32 硬件 PWM 外设
   - platform: ledc
     pin: GPIO45
     id: buzzer_pwm
@@ -119,10 +133,84 @@ output:
 
   # [8] Microphone power enable (TPS22916 load switch)
   # 麦克风供电使能（TPS22916 负载开关）
-  # Must be HIGH before recording / 录音前必须拉高
   - platform: gpio
     pin: GPIO38
     id: mic_power_enable
+
+script:
+  - id: beep_short
+    mode: restart
+    then:
+      - light.turn_on:
+          id: buzzer
+          brightness: 50%
+      - delay: 80ms
+      - light.turn_off: buzzer
+
+  - id: page_prev
+    mode: single
+    then:
+      - script.execute: beep_short
+      - lambda: 'reterminal::prev_page();'
+      - component.update: epaper_display
+
+  - id: page_next
+    mode: single
+    then:
+      - script.execute: beep_short
+      - lambda: 'reterminal::next_page();'
+      - component.update: epaper_display
+
+  - id: do_fetch
+    mode: single
+    then:
+      - script.execute: beep_short
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
+      - component.update: epaper_display
+
+  # Runs once per wake. Button wakes flip the page instantly with the values
+  # cached in RTC memory; timer/green wakes wait for HA, fetch history when
+  # due, then redraw once.
+  - id: boot_flow
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: |-
+              auto a = reterminal::wake_action();
+              return a == reterminal::WAKE_PREV || a == reterminal::WAKE_NEXT;
+          then:
+            - script.execute: beep_short
+            - lambda: |-
+                if (reterminal::wake_action() == reterminal::WAKE_PREV)
+                  reterminal::prev_page();
+                else
+                  reterminal::next_page();
+            - component.update: epaper_display
+          else:
+            - if:
+                condition:
+                  lambda: 'return reterminal::wake_action() == reterminal::WAKE_FETCH;'
+                then:
+                  - script.execute: beep_short
+            - wait_until:
+                condition:
+                  api.connected:
+                timeout: 20s
+            # Give HA a moment to push sensor states after connecting
+            - delay: 3s
+            - if:
+                condition:
+                  lambda: |-
+                    return reterminal::fetch_due() ||
+                           reterminal::wake_action() == reterminal::WAKE_FETCH;
+                then:
+                  - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
+            - component.update: epaper_display
 
 sensor:
   # --- SHT4x temperature & humidity (I2C) ---
@@ -175,63 +263,102 @@ sensor:
           min_value: 0
           max_value: 100
 
+  # --- Indoor / outdoor climate from HA ---
+  # Last values are cached in RTC memory so button wakes can redraw
+  # instantly, before the API reconnects.
+  - platform: homeassistant
+    id: in_temp
+    entity_id: sensor.indoor_temperature
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::last_val[reterminal::S_IN_T] = x;
+            reterminal::last_val_time = ::time(nullptr);
+
+  - platform: homeassistant
+    id: out_temp
+    entity_id: sensor.outdoor_temperature
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::last_val[reterminal::S_OUT_T] = x;
+            reterminal::last_val_time = ::time(nullptr);
+
+  - platform: homeassistant
+    id: in_hum
+    entity_id: sensor.indoor_humidity
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::last_val[reterminal::S_IN_H] = x;
+            reterminal::last_val_time = ::time(nullptr);
+
+  - platform: homeassistant
+    id: out_hum
+    entity_id: sensor.outdoor_humidity
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::last_val[reterminal::S_OUT_H] = x;
+            reterminal::last_val_time = ::time(nullptr);
+
 binary_sensor:
-  # Button 1 (green) — flash LED + short beep
-  # 按钮 1（绿色）— LED 闪烁 + 短蜂鸣
+  # The millis() gate skips the phantom on_press fired while booting from a
+  # button wake — boot_flow already handles that press.
+
+  # Button 1 (green) — force history fetch + redraw
   - platform: gpio
     pin:
       number: GPIO3
       mode: INPUT_PULLUP
       inverted: true
+      allow_other_uses: true
     id: button_1
     name: "Button 1 (Green)"
     on_press:
       then:
-        - logger.log: "Button 1 (Green) pressed - flash LED + beep"
-        - light.turn_on: onboard_led
-        - light.turn_on:
-            id: buzzer
-            brightness: 50%
-        - delay: 200ms
-        - light.turn_off: buzzer
-        - light.turn_off: onboard_led
+        - if:
+            condition:
+              lambda: 'return millis() > 2000;'
+            then:
+              - script.execute: do_fetch
 
-  # Button 2 (right white, GPIO4) — deep sleep wake-up button
-  # 按钮 2（右白，GPIO4）— 深度睡眠唤醒按钮
+  # Button 2 (right white) — next page
+  - platform: gpio
+    pin:
+      number: GPIO4
+      mode: INPUT_PULLUP
+      inverted: true
+      allow_other_uses: true
+    id: button_2
+    name: "Button 2 (Right White)"
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: 'return millis() > 2000;'
+            then:
+              - script.execute: page_next
 
-  # Button 3 (left white) — toggle LED on/off
-  # 按钮 3（左白）— 切换 LED 开/关
+  # Button 3 (left white) — previous page
   - platform: gpio
     pin:
       number: GPIO5
       mode: INPUT_PULLUP
       inverted: true
+      allow_other_uses: true
     id: button_3
     name: "Button 3 (Left White)"
     on_press:
       then:
-        - logger.log: "Button 3 (Left White) pressed - toggle LED"
-        - light.toggle: onboard_led
+        - if:
+            condition:
+              lambda: 'return millis() > 2000;'
+            then:
+              - script.execute: page_prev
 
   # [9] SD card detect (LOW = card present)
   # SD 卡检测（低电平 = 卡已插入）
-  #
-  # NOTE on SD card in ESPHome:
-  # ESPHome cannot directly access the SD card file system (read/write files,
-  # create directories, etc.) the way Arduino can. In ESPHome, the SD card is
-  # used indirectly by specific components:
-  #   - online_image: caches downloaded images to SD card
-  #   - media_player: plays audio files stored on the card
-  #   - Works with PSRAM for large buffer allocation
-  # For direct file operations (e.g. recording WAV files), use the Arduino framework.
-  #
-  # ESPHome 中 SD 卡的限制：
-  # ESPHome 不能像 Arduino 那样直接操作 SD 卡文件系统（读写文件、创建目录等）。
-  # SD 卡在 ESPHome 中由特定组件间接使用：
-  #   - online_image：将下载的图片缓存到 SD 卡
-  #   - media_player：播放卡上存储的音频文件
-  #   - 配合 PSRAM 做大缓冲
-  # 如需直接操作文件（如录音存 WAV），请使用 Arduino 框架。
   - platform: gpio
     pin:
       number: GPIO15
@@ -258,17 +385,12 @@ time:
   # PCF8563 is at I2C address 0x51 with a CR1220 coin cell backup.
   # On boot we read the RTC; when HA syncs, we write back to the RTC.
   # PCF8563 在 I2C 地址 0x51，由 CR1220 纽扣电池备份。
-  # 启动时读取 RTC；当 HA 同步时间后，回写到 RTC。
   - platform: pcf8563
     id: rtc_time
     address: 0x51
-    # No periodic re-reads needed; HA sync handles it
-    # 无需定期重读；HA 同步来处理
     update_interval: never
 
   - platform: homeassistant
-    # When HA pushes a time sync, write it to the hardware RTC
-    # 当 HA 推送时间同步时，写入硬件 RTC
     on_time_sync:
       then:
         - pcf8563.write_time:
@@ -286,7 +408,7 @@ ota:
 # Wi-Fi settings / Wi-Fi 设置
 wifi:
   ssid: "your-ssid"
-  password: "your-wifi-password"
+  password: !secret wifi_password
   ap:
     ssid: "reTerminal-E1001"
     password: "ChangeMe123"
@@ -296,13 +418,6 @@ captive_portal:
 # =============================================================================
 # [8] PDM Microphone / PDM 麦克风
 # =============================================================================
-# The onboard PDM mic outputs a 1-bit sigma-delta stream.
-# ESP32-S3 built-in PDM peripheral decodes it — no external codec needed.
-# 板载 PDM 麦克风输出 1 位 sigma-delta 流。
-# ESP32-S3 内置 PDM 外设解码 — 无需外部编解码器。
-#
-# In HA, this microphone can be used with Voice Assistant / Assist Pipeline.
-# 在 HA 中，此麦克风可配合语音助手 / Assist 管道使用。
 
 microphone:
   - platform: i2s_audio
@@ -328,98 +443,53 @@ display:
     busy_pin:
       number: GPIO13
       inverted: true
-    update_interval: 300s
+    # Redraws are triggered explicitly: once per wake and on page changes
+    update_interval: never
     lambda: |-
-      // ---- Log all sensor values / 打印所有传感器值到日志 ----
-      ESP_LOGD("display", "=== ePaper display refresh ===");
-
-      // ---- Title / 标题 ----
-      it.printf(400, 15, id(font_medium), TextAlign::TOP_CENTER,
-                "reTerminal E1001 Dashboard");
-      it.line(20, 55, 780, 55);
-
-      // ---- RTC Time / RTC 时间 ----
-      auto now = id(rtc_time).now();
-      if (now.is_valid()) {
-        it.strftime(400, 65, id(font_medium), TextAlign::TOP_CENTER,
-                    "%Y-%m-%d  %H:%M", now);
-        ESP_LOGD("display", "RTC time: %04d-%02d-%02d %02d:%02d",
-                 now.year, now.month, now.day_of_month, now.hour, now.minute);
-      } else {
-        it.printf(400, 65, id(font_medium), TextAlign::TOP_CENTER,
-                  "RTC: waiting for sync...");
-        ESP_LOGW("display", "RTC: not synced yet");
+      switch (reterminal::page) {
+        case 0:
+          reterminal::draw_world_clock(it, id(font_large), id(font_medium), id(font_small));
+          break;
+        case 1:
+          reterminal::draw_numbers(it, id(font_huge), id(font_large), id(font_medium),
+                                   id(font_small), id(battery_level).state);
+          break;
+        case 2:
+          reterminal::draw_graph_page(it, reterminal::S_IN_T, reterminal::S_OUT_T,
+                                      "Temperature - 24h", "°C", id(font_medium), id(font_small));
+          break;
+        case 3:
+          reterminal::draw_graph_page(it, reterminal::S_IN_H, reterminal::S_OUT_H,
+                                      "Humidity - 24h", "%", id(font_medium), id(font_small));
+          break;
       }
-
-      // ---- Temperature / 温度 ----
-      if (id(temp_sensor).has_state()) {
-        ESP_LOGD("display", "Temperature: %.1f C", id(temp_sensor).state);
-        it.printf(30, 120, id(font_large), "Temp: %.1f C", id(temp_sensor).state);
-      } else {
-        ESP_LOGW("display", "Temperature: NO DATA");
-        it.printf(30, 120, id(font_large), "Temp: -- C");
-      }
-
-      // ---- Humidity / 湿度 ----
-      if (id(hum_sensor).has_state()) {
-        ESP_LOGD("display", "Humidity: %.1f %%", id(hum_sensor).state);
-        it.printf(30, 185, id(font_large), "Hum:  %.1f %%", id(hum_sensor).state);
-      } else {
-        ESP_LOGW("display", "Humidity: NO DATA");
-        it.printf(30, 185, id(font_large), "Hum:  -- %%");
-      }
-
-      // ---- Battery / 电池 ----
-      if (id(battery_level).has_state()) {
-        ESP_LOGD("display", "Battery: %.0f%%  Voltage: %.2fV",
-                 id(battery_level).state, id(battery_voltage).state);
-        it.printf(30, 260, id(font_medium), "Battery: %.0f%%  (%.2fV)",
-                  id(battery_level).state, id(battery_voltage).state);
-      } else {
-        it.printf(30, 260, id(font_medium), "Battery: --");
-      }
-
-      // ---- SD card status / SD 卡状态 ----
-      if (id(sd_card_detect).state) {
-        it.printf(30, 305, id(font_small), "SD Card: inserted");
-      } else {
-        it.printf(30, 305, id(font_small), "SD Card: not detected");
-      }
-
-      // ---- Microphone status / 麦克风状态 ----
-      it.printf(30, 335, id(font_small), "PDM Microphone: enabled (GPIO41/42)");
-
-      // ---- Button hints / 按钮提示 ----
-      it.line(20, 370, 780, 370);
-      it.printf(30, 380, id(font_small), "BTN1(Green): LED flash + beep");
-      it.printf(30, 405, id(font_small), "BTN2(Right): Deep sleep wake");
-      it.printf(30, 430, id(font_small), "BTN3(Left):  Toggle LED on/off");
-
-      // ---- Footer / 页脚 ----
-      it.printf(400, 458, id(font_small), TextAlign::TOP_CENTER,
-                "Selected reTerminal hardware features enabled");
 
 # =============================================================================
 # [10] Deep sleep / 深度睡眠
-# The device wakes for run_duration, updates sensors & display, then sleeps.
-# Press the right white button (GPIO4) to wake manually at any time.
-# 设备醒来 run_duration 时间后进入睡眠。按右白按钮可手动唤醒。
+# Wakes every 5 min to refresh; any button wakes it immediately.
 # =============================================================================
 
 deep_sleep:
   id: deep_sleep_1
-  run_duration: 30s
+  # Room for wifi + API connect + a history fetch + one e-paper refresh
+  run_duration: 45s
   sleep_duration: 5min
-  # ESP32-S3 only supports ext1 wakeup (ext0 not available)
-  # ESP32-S3 仅支持 ext1 唤醒（ext0 不可用）
   esp32_ext1_wakeup:
+    mode: ANY_LOW
     pins:
+      - number: GPIO3
+        mode: INPUT_PULLUP
+        allow_other_uses: true
       - number: GPIO4
         mode: INPUT_PULLUP
-    mode: ANY_LOW
+        allow_other_uses: true
+      - number: GPIO5
+        mode: INPUT_PULLUP
+        allow_other_uses: true
 
 # secrets.yaml (create this file alongside your config):
-# wifi_ssid: "Your WiFi SSID"
 # wifi_password: "Your WiFi Password"
 # ota_password: "choose-a-strong-password"
 # api_encryption_key: "generate with: openssl rand -base64 32"
+# ha_http_ip: "192.168.x.x"           # HA LAN IP (firewall pinhole target)
+# ha_api_token: "long-lived access token of a non-admin HA user"
