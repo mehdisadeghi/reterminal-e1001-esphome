@@ -3,7 +3,9 @@
 // Page renderers for the 800x480 ePaper.
 
 #include "esphome/components/display/display.h"
+#include "esp_system.h"
 #include "device.h"
+#include "khayyam_fa.h"
 #include "jalali.h"
 #include "pure.h"
 
@@ -458,6 +460,28 @@ inline void draw_analog_clocks(Display &it, BaseFont *med, BaseFont *small_f) {
     } else {
       it.print(cx, ly, small_f, TextAlign::TOP_CENTER, label);
     }
+  }
+}
+
+// Random quatrain, re-picked on first use and then every few hours.
+RTC_DATA_ATTR int khayyam_idx = -1;
+RTC_DATA_ATTR time_t khayyam_at = 0;
+constexpr time_t KHAYYAM_INTERVAL = 6 * 3600;
+
+inline void draw_khayyam(Display &it, BaseFont *title_f, BaseFont *body_f) {
+  time_t now = ::time(nullptr);
+  if (khayyam_idx < 0 || khayyam_idx >= KHAYYAM_COUNT ||
+      (now > MIN_VALID_EPOCH && now - khayyam_at > KHAYYAM_INTERVAL)) {
+    khayyam_idx = (int) (esp_random() % (uint32_t) KHAYYAM_COUNT);
+    khayyam_at = now;
+  }
+  it.print(400, 28, title_f, TextAlign::TOP_CENTER, KHAYYAM_TITLE);
+  it.line(240, 118, 560, 118);
+  const Quatrain &q = KHAYYAM_FA[khayyam_idx];
+  int y = 158;
+  for (int i = 0; i < 4; i++) {
+    it.print(400, y, body_f, TextAlign::TOP_CENTER, q.l[i]);
+    y += 76;
   }
 }
 

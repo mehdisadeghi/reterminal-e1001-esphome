@@ -30,7 +30,8 @@ exists.
 | `reterminal/jalali.h` | Gregorian → Solar Hijri conversion (jdf algorithm) |
 | `reterminal/tzdata.h` | Embedded IANA-name → current-POSIX-rule table (generated) |
 | `tests/host_test.cpp` | Host-side unit tests for `pure.h` (see header for the one-liner) |
-| `noqte.ttf` | Noqte font (from `../noqte`) for the Persian test page |
+| `noqte.ttf`, `vazirmatn.ttf` | Persian fonts (test page, Khayyam titles/body) |
+| `gen_fa_assets.py` | Pre-shapes the Khayyam corpus into `reterminal/khayyam_fa.h` + `fa_*_glyphs.yaml` |
 | `partitions.csv` | 32 MB flash layout: 2×3 MB OTA apps + 24 MB `hist` data partition |
 | `tzdata.csv` | Same tz data as a file — the SD-card override source |
 | `gen_tzdata.py` | Regenerates both from upstream tzdata (`uv run --with tzdata python3 gen_tzdata.py`) |
@@ -60,7 +61,9 @@ builder folder (copy the directories as-is).
    long quarter markers, offsets in captions, home caption inverted,
    **night zones rendered as inverted dials** (window configurable).
 7. **Noqte** — «نقطه» via Arabic presentation forms, no shaping engine.
-   No status bar.
+8. **Khayyam** — a random quatrain from the Rubaiyat (106 pre-shaped at
+   build time by `gen_fa_assets.py`; Vazirmatn body, Noqte title), picked
+   with the ESP32's hardware RNG and rotated every 6 hours.
 
 Inverted status bar on pages 2–6: Solar Hijri date left, Gregorian
 (`Wed 15 Jul 2026`) centered; right side, growing leftward: battery %,
@@ -88,7 +91,7 @@ Home Timezone (city name), Zone 1–5 (spec, see below) with Zone 1–5
 Enabled toggles, Column 1–3 (climate sources, see below), HA URL and HA
 Token (REST endpoint — seeded from secrets, editable without reflashing),
 HA Sync Interval (minutes between API syncs, default 15), Night From/To
-(analog night window), Show 1–7 (per-page visibility; navigation,
+(analog night window), Show 1–8 (per-page visibility; navigation,
 auto-cycle, and start page skip hidden pages), Page Auto-Cycle (one page
 per timer wake, default off), Radio (persisted wifi kill), Status Bar
 Climate, Status Bar Solar Hijri, Pause Deep Sleep (RAM-only — any reset
@@ -114,7 +117,7 @@ controls, and optionally assign them the device's Area:
 - `input_text.reterminal_config` — semicolon-separated config changes,
   e.g. `zone3=Asia/Dubai;show7=off;night=19-7;col1=Device=dev`. Keys:
   `zone1..zone5` and `col1..col3` (spec or empty), `home`, `night=F-T`,
-  `start=N`, `sync=MIN`, `cycle|showN=on|off`. Applied at the next sync
+  `start=N`, `sync=MIN`, `bar=DIGITS`, `cycle|showN=on|off`. Applied at the next sync
   (instantly while awake) into the device's persisted config entities,
   then the field is cleared as the acknowledgement + one beep — empty
   field = consumed, text still present = not delivered yet. Clearing

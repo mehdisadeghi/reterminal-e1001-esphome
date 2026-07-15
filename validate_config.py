@@ -17,7 +17,7 @@ import re
 import sys
 from datetime import datetime, timezone
 
-MAX_ZONES, MAX_COLS, PAGES = 5, 3, 7
+MAX_ZONES, MAX_COLS, PAGES = 5, 3, 8
 MAX_FILE = 8192  # firmware read cap
 LABEL_MAX = 15   # Zone.city / Column.label storage minus NUL
 
@@ -182,6 +182,11 @@ def main():
                 isinstance(b, bool) for b in spv):
             err(f"show_pages: array of exactly {PAGES} booleans required")
 
+    if "bar_pages" in doc:
+        bp = doc["bar_pages"]
+        if not isinstance(bp, str) or not all("1" <= c <= "8" for c in bp):
+            err("bar_pages: string of page digits 1..8 required, e.g. \"2345\"")
+
     if "ha_url" in doc and not str(doc["ha_url"]).startswith("http"):
         err("ha_url: must start with http")
     if "ha_token" in doc and "REPLACE" in str(doc["ha_token"]):
@@ -197,7 +202,8 @@ def main():
             err("set_time: ISO-8601 UTC timestamp required, e.g. 2026-07-15T12:00:00Z")
 
     known = {"version", "set_time", "home_zone", "zones", "columns", "ha_url", "ha_token",
-             "sync_interval_min", "start_page", "night_from", "night_to", "show_pages"}
+             "sync_interval_min", "start_page", "night_from", "night_to", "show_pages",
+             "bar_pages"}
     for key in doc:
         if key not in known:
             warn(f"unknown key '{key}' (ignored by the device)")

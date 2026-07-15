@@ -75,7 +75,19 @@ static bool rtc_bad = false;      // RTC chip unusable at boot (dead cell / VL /
 static time_t pre_rtc_time = 0;   // system time captured before the RTC read
 static bool force_sync = false;  // green button: sync + fetch now
 static int sync_interval_min = 15;
-static bool page_enabled_[PAGE_COUNT] = {true, true, true, true, true, true, true};
+static bool page_enabled_[PAGE_COUNT] = {true, true, true, true, true, true, true, true};
+static bool bar_on_[PAGE_COUNT] = {false, true, true, true, true, false, false, false};
+
+// "2345" = show the status bar on pages 2..5 (1-based digits)
+inline void set_bar_pages(const char *s) {
+  for (int i = 0; i < PAGE_COUNT; i++)
+    bar_on_[i] = false;
+  for (; *s; s++) {
+    int d = *s - '1';
+    if (d >= 0 && d < PAGE_COUNT)
+      bar_on_[d] = true;
+  }
+}
 
 inline bool page_hidden(int p) { return !page_enabled_[p]; }
 
@@ -825,6 +837,10 @@ inline std::string sd_process() {
       snprintf(kv, sizeof(kv), "show%d=%s", i + 1, sp[i].as<bool>() ? "on" : "off");
       add(kv);
     }
+  }
+  if (doc["bar_pages"].is<const char *>()) {
+    snprintf(kv, sizeof(kv), "bar=%s", (const char *) doc["bar_pages"]);
+    add(kv);
   }
 
   // one-shot air-gapped clock set: applied only when the value changes

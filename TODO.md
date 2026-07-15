@@ -2,6 +2,12 @@
 
 ## Done
 
+- [x] Persian stage 1: Khayyam page (106 quatrains pre-shaped at build time
+      by gen_fa_assets.py, Vazirmatn body + Noqte title, hardware-RNG pick
+      rotated 6-hourly); Status Bar Pages config; Show 8 switch
+- [x] Restructure: reterminal/ modules (pure/device/draw), YAML packages,
+      host-side unit tests (calendar, jalali, zone/DST/column parsers)
+
 - [x] Multi-page dashboard with button navigation; all three buttons wake
       from deep sleep, wake pin routed to flip/fetch actions
 - [x] World clock (digital): runtime zone list (1–5), dates, offsets vs
@@ -58,22 +64,9 @@
 
 ## Open
 
-- [ ] Persian support, stage 1: build-time pipeline pre-shaping the Khayyam
-      corpus (../righter khayyam_fa.yaml, 28 KB) into presentation-form
-      strings + exact glyph sets; new Khayyam page (no status bar) showing a
-      random quatrain (esp_random), rotated every few hours; Vazirmatn body
-      + Noqte title (verify Vazirmatn ships presentation-form cmap entries,
-      else bake them with fontTools)
 - [ ] Persian support, stage 2: on-device reshaper (contextual forms,
       lam-alef, ZWNJ) for arbitrary/SD-provided text and the Persian
       status-bar date
-- [ ] Status bar visibility per page as config (currently hardcoded: off on
-      world clock and noqte pages)
-- [ ] Restructure for scale: move the C++ from the single header into a
-      proper ESPHome external component (components/reterminal/), split the
-      YAML with packages/!include, host-side unit tests for pure logic
-      (tz/POSIX parsers, jalali, reshaper, config validation), CI compile
-- [ ] Commit the accumulated backlog (everything since 2cc1f1c)
 
 - [ ] Inside/outside temps reported identical — firmware mapping verified;
       needs `Got state` log lines from one wake (duplicate/stale Zigbee

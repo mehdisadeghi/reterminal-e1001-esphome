@@ -71,6 +71,8 @@ esphome:
           pe[4] = id(show_page5).state;
           pe[5] = id(show_page6).state;
           pe[6] = id(show_page7).state;
+          pe[7] = id(show_page8).state;
+          reterminal::set_bar_pages(id(bar_pages).state.c_str());
           reterminal::rebuild_zones(
               id(zone1_en).state ? id(zone_1).state.c_str() : "",
               id(zone2_en).state ? id(zone_2).state.c_str() : "",

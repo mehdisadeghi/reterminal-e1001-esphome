@@ -68,6 +68,22 @@ text:
       then:
         - script.execute: zones_changed
 
+  # Pages showing the bottom status bar, as 1-based digits (e.g. "2345")
+  - platform: template
+    name: "Status Bar Pages"
+    id: bar_pages
+    optimistic: true
+    restore_value: true
+    initial_value: "2345"
+    max_length: 8
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::set_bar_pages(x.c_str());
+            reterminal::bump_interact();
+
   # Matched against the zone cities by name; the match gets the inversion
   # and is the base for the displayed offsets
   - platform: template
@@ -358,6 +374,22 @@ switch:
     on_turn_off:
       - lambda: |-
           reterminal::page_enabled_[5] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 8 Khayyam"
+    id: show_page8
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[7] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[7] = false;
           if (reterminal::page_hidden(reterminal::page))
             reterminal::next_page();
           reterminal::bump_interact();

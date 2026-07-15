@@ -28,7 +28,8 @@ OTA partition) is possible later but out of scope here.
 | `sync_interval_min` | int ≥1 | minutes between HA syncs |
 | `start_page` | int ≥1 | page after cold boot |
 | `night_from`, `night_to` | int 0..23 | analog dial night-inversion hours |
-| `show_pages` | array of 7 bools | per-page visibility |
+| `show_pages` | array of 8 bools | per-page visibility |
+| `bar_pages` | string | pages showing the status bar, as digits (e.g. `"2345"`) |
 
 Zone object: either `{"tz": "Asia/Tehran", "label": "Tehran"}` (IANA name
 resolved against the tz table, `label` optional) or the manual form:

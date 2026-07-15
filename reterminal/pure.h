@@ -27,7 +27,7 @@ namespace reterminal {
 
 static const char *const TAG = "reterminal";
 
-constexpr int PAGE_COUNT = 7;  // world clock, numbers, temp, hum, combined, analog, noqte
+constexpr int PAGE_COUNT = 8;  // clock, numbers, temp, hum, week, analog, noqte, khayyam
 constexpr int POINTS = 192;    // buckets per window
 constexpr time_t SPAN = 24 * 3600;
 constexpr time_t SPAN_WEEK = 7 * 24 * 3600;

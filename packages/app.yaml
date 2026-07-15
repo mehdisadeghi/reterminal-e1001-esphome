@@ -34,6 +34,16 @@ font:
     id: font_noqte
     size: 260
     glyphs: "ﻧﻘﻄﻪ"
+  # Persian, pre-shaped at build time (gen_fa_assets.py); the glyph lists
+  # are generated to exactly cover the corpus and title
+  - file: "vazirmatn.ttf"
+    id: font_fa_body
+    size: 40
+    glyphs: !include ../fa_glyphs.yaml
+  - file: "noqte.ttf"
+    id: font_fa_title
+    size: 64
+    glyphs: !include ../fa_title_glyphs.yaml
 
 interval:
   # Enter sleep a short grace after the last activity, once no command
@@ -506,9 +516,11 @@ display:
         case 6:
           it.print(400, 240, id(font_noqte), TextAlign::CENTER, "ﻪﻄﻘﻧ");
           break;
+        case 7:
+          reterminal::draw_khayyam(it, id(font_fa_title), id(font_fa_body));
+          break;
       }
-      // no bar on the world clock (0) and noqte (6) pages
-      if (reterminal::page != 0 && reterminal::page != 6)
+      if (reterminal::bar_on_[reterminal::page])
         reterminal::draw_status_bar(it, id(font_small), id(battery_level).state,
                                     id(temp_sensor).state, id(hum_sensor).state,
                                     id(bar_climate).state, id(sd_card_detect).state,
