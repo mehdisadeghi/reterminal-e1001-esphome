@@ -18,14 +18,11 @@ deploy:
 # ESPHome integration's firmware update entity (the add-on does the work).
 # Runs on the HA host via the supervisor's core API proxy; the device must
 # be awake for the OTA step (press a button, or use the keep-awake helper).
+# The remote script runs in a login shell (bash -ls) because non-interactive
+# ssh skips the profile that exports SUPERVISOR_TOKEN.
 UPDATE_ENTITY ?= update.reterminal_e1001_firmware
 release: deploy
-	ssh $(USER)@$(HOST) 'curl -sf -X POST \
-	  -H "Authorization: Bearer $$SUPERVISOR_TOKEN" \
-	  -H "Content-Type: application/json" \
-	  -d "{\"entity_id\": \"$(UPDATE_ENTITY)\"}" \
-	  http://supervisor/core/api/services/update/install' \
-	  && echo "release scheduled: HA is compiling and will OTA $(DEVICE)"
+	ssh $(USER)@$(HOST) "bash -ls -- $(UPDATE_ENTITY)" < release_remote.sh
 
 # Host-side checks: pure-logic unit tests + example config validation
 test:
