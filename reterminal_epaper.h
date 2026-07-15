@@ -79,16 +79,32 @@ inline bool fetch_due() {
   return now > MIN_VALID_EPOCH && (fetch_time == 0 || now - fetch_time > FETCH_INTERVAL);
 }
 
-inline void prev_page() { page = (page + PAGE_COUNT - 1) % PAGE_COUNT; }
-inline void next_page() { page = (page + 1) % PAGE_COUNT; }
+// Mirrors of HA switches and boot diagnostics, set from YAML.
+static bool device_only = false;  // climate pages use the onboard SHT4x only
+static bool radio_on = true;      // wifi enabled this wake
+static bool rtc_bad = false;      // RTC had no valid time at boot (dead cell / VL)
+
+// In device-only mode the in/out 24 h graph pages are meaningless.
+inline bool page_hidden(int p) { return device_only && (p == 2 || p == 3); }
+
+inline void prev_page() {
+  do {
+    page = (page + PAGE_COUNT - 1) % PAGE_COUNT;
+  } while (page_hidden(page));
+}
+inline void next_page() {
+  do {
+    page = (page + 1) % PAGE_COUNT;
+  } while (page_hidden(page));
+}
 
 // --- Wake economics ---------------------------------------------------------
 
 RTC_DATA_ATTR time_t time_sync_at = 0;
 
 // page indices match the display lambda: 1 numbers, 2-4 graphs
-inline bool page_needs_history(int p) { return p >= 2 && p <= 4; }
-inline bool page_needs_live(int p) { return p == 1; }
+inline bool page_needs_history(int p) { return !device_only && p >= 2 && p <= 4; }
+inline bool page_needs_live(int p) { return !device_only && p == 1; }
 
 // Whether this wake should wait for the network at all: only when the shown
 // page consumes HA data or the clock has not been synced for a day.
@@ -96,6 +112,18 @@ inline bool network_needed() {
   time_t now = ::time(nullptr);
   bool time_stale = now < MIN_VALID_EPOCH || time_sync_at == 0 || now - time_sync_at > 24 * 3600;
   return time_stale || page_needs_live(page) || page_needs_history(page);
+}
+
+// A button flip onto a data page with nothing to show yet justifies an
+// immediate network refresh.
+inline bool page_data_empty(int p) {
+  if (p == 1)
+    return page_needs_live(p) && last_val_time == 0;
+  if (p == 2 || p == 3)
+    return page_needs_history(p) && fetch_time == 0;
+  if (p == 4)
+    return !device_only && week_fetch_time == 0;
+  return false;
 }
 
 // --- History fetch ----------------------------------------------------------
@@ -292,6 +320,48 @@ inline bool fetch_history(const char *base, const char *token) {
   return day_ok && week_ok;
 }
 
+// --- Device-only sampling ---------------------------------------------------
+
+inline void clear_history() {
+  fetch_time = 0;
+  week_fetch_time = 0;
+}
+
+// Slide a window's buckets left so its end lands on `now`.
+inline void roll_window(float rows[SERIES_COUNT][POINTS], time_t &end_t, time_t bucket,
+                        time_t now) {
+  if (end_t == 0 || now < end_t || now - end_t > bucket * POINTS) {
+    for (int s = 0; s < SERIES_COUNT; s++)
+      for (int i = 0; i < POINTS; i++)
+        rows[s][i] = NAN;
+    end_t = now;
+    return;
+  }
+  int shift = (int) ((now - end_t) / bucket);
+  if (shift > 0) {
+    for (int s = 0; s < SERIES_COUNT; s++) {
+      memmove(&rows[s][0], &rows[s][shift], (POINTS - shift) * sizeof(float));
+      for (int i = POINTS - shift; i < POINTS; i++)
+        rows[s][i] = NAN;
+    }
+    end_t += (time_t) shift * bucket;
+  }
+}
+
+// Device-only mode: build the graph history from the onboard sensor, one
+// sample per wake, into the same buffers the HA fetch would fill.
+inline void sample_device(float t, float h) {
+  time_t now = ::time(nullptr);
+  if (now < MIN_VALID_EPOCH || std::isnan(t) || std::isnan(h))
+    return;
+  roll_window(series, fetch_time, SPAN / POINTS, now);
+  roll_window(series_week, week_fetch_time, SPAN_WEEK / POINTS, now);
+  series[S_IN_T][POINTS - 1] = t;
+  series[S_IN_H][POINTS - 1] = h;
+  series_week[S_IN_T][POINTS - 1] = t;
+  series_week[S_IN_H][POINTS - 1] = h;
+}
+
 // --- Pages ------------------------------------------------------------------
 
 // Newlib's POSIX TZ handling on the ESP32 is unreliable (per-row setenv/tzset
@@ -396,9 +466,22 @@ inline void draw_world_clock(Display &it, BaseFont *big, BaseFont *med, BaseFont
   }
 }
 
-// Bottom status bar, inverted, drawn on every page:
-// Solar Hijri date left, Gregorian middle, battery right.
-inline void draw_status_bar(Display &it, BaseFont *small_f, float battery_pct) {
+inline void draw_sd_icon(Display &it, int x, int y) {
+  auto c = esphome::display::COLOR_OFF;
+  it.line(x + 3, y, x + 9, y, c);  // top edge, shortened by the corner notch
+  it.line(x + 9, y, x + 9, y + 13, c);
+  it.line(x, y + 13, x + 9, y + 13, c);
+  it.line(x, y + 3, x, y + 13, c);
+  it.line(x, y + 3, x + 3, y, c);
+  for (int px = x + 2; px <= x + 8; px += 2)
+    it.line(px, y + 2, px, y + 4, c);
+}
+
+// Bottom status bar, inverted, drawn on every page. Left: Solar Hijri date;
+// center: Gregorian date; right, growing leftwards: battery, SD-card icon,
+// RTC warning, device climate.
+inline void draw_status_bar(Display &it, BaseFont *small_f, float battery_pct, float dev_t,
+                            float dev_h, bool show_climate, bool sd_present) {
   it.filled_rectangle(0, 446, 800, 34);
   time_t now = ::time(nullptr);
   if (now > MIN_VALID_EPOCH) {
@@ -412,13 +495,39 @@ inline void draw_status_bar(Display &it, BaseFont *small_f, float battery_pct) {
               "%d %s %d", jd, jalali::MONTHS[jm - 1], jy);
     it.print(400, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER, greg);
   }
-  if (!std::isnan(battery_pct))
-    it.printf(780, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_RIGHT, "%.0f%%",
+  int x = 780;
+  if (!std::isnan(battery_pct)) {
+    it.printf(x, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_RIGHT, "%.0f%%",
               battery_pct);
+    x -= 58;
+  }
+  if (sd_present) {
+    draw_sd_icon(it, x - 10, 456);
+    x -= 22;
+  }
+  if (rtc_bad) {
+    it.print(x, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_RIGHT, "RTC!");
+    x -= 54;
+  }
+  if (show_climate && !std::isnan(dev_t) && !std::isnan(dev_h))
+    it.printf(x, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_RIGHT,
+              "T %.0f° H %.0f", dev_t, dev_h);
 }
 
 inline void draw_numbers(Display &it, BaseFont *huge, BaseFont *large, BaseFont *med,
                          BaseFont *small_f, float dev_t, float dev_h) {
+  if (device_only) {
+    it.print(400, 40, med, TextAlign::TOP_CENTER, "Device");
+    if (std::isnan(dev_t))
+      it.print(400, 140, large, TextAlign::TOP_CENTER, "--");
+    else
+      it.printf(400, 130, huge, TextAlign::TOP_CENTER, "%.1f°C", dev_t);
+    if (std::isnan(dev_h))
+      it.print(400, 290, large, TextAlign::TOP_CENTER, "--");
+    else
+      it.printf(400, 280, huge, TextAlign::TOP_CENTER, "%.0f%%", dev_h);
+    return;
+  }
   const struct {
     int x;
     const char *title;
@@ -553,14 +662,17 @@ inline void draw_week_page(Display &it, BaseFont *med, BaseFont *small_f) {
   const int X0 = 84, X1 = 784;
 
   // one legend for both bands, centered so it reads as global
-  it.line(300, 14, 336, 14);
-  it.line(300, 15, 336, 15);
-  it.print(344, 4, small_f, TextAlign::TOP_LEFT, "in");
-  for (int x = 410; x < 446; x += 8) {
-    it.line(x, 14, x + 4, 14);
-    it.line(x, 15, x + 4, 15);
+  // (device-only mode has a single unlabeled series)
+  if (!device_only) {
+    it.line(300, 14, 336, 14);
+    it.line(300, 15, 336, 15);
+    it.print(344, 4, small_f, TextAlign::TOP_LEFT, "in");
+    for (int x = 410; x < 446; x += 8) {
+      it.line(x, 14, x + 4, 14);
+      it.line(x, 15, x + 4, 15);
+    }
+    it.print(454, 4, small_f, TextAlign::TOP_LEFT, "out");
   }
-  it.print(454, 4, small_f, TextAlign::TOP_LEFT, "out");
 
   // one local-shifted time base shared by both bands and the day labels
   int loff = local_offset_min(week_fetch_time);
@@ -583,8 +695,9 @@ inline void draw_week_page(Display &it, BaseFont *med, BaseFont *small_f) {
       it.print(16, ty + i * 30, small_f, esphome::display::COLOR_OFF, TextAlign::TOP_CENTER, c);
     }
 
+    int nseries = device_only ? 1 : 2;
     float lo = NAN, hi = NAN;
-    for (int s = 0; s < 2; s++) {
+    for (int s = 0; s < nseries; s++) {
       const float *ser = series_week[s == 0 ? band.a : band.b];
       for (int i = 0; i < POINTS; i++) {
         float v = ser[i];
@@ -628,7 +741,7 @@ inline void draw_week_page(Display &it, BaseFont *med, BaseFont *small_f) {
     }
     it.rectangle(X0, Y0, X1 - X0 + 1, Y1 - Y0 + 1);
 
-    for (int pass = 0; pass < 2; pass++) {
+    for (int pass = 0; pass < nseries; pass++) {
       const float *ser = series_week[pass == 0 ? band.a : band.b];
       bool dashed = pass == 1;
       for (int i = 0; i + 1 < POINTS; i++) {

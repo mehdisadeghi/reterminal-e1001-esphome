@@ -52,12 +52,22 @@ esphome:
       - component.update: battery_level
       # Read RTC time before anything needs the clock / 启动时读取 RTC 时间
       - pcf8563.read_time:
-      # Cold boot (not a deep-sleep wake): show the configured start page
+      # Mirror switches, flag a dead RTC, apply the start page on cold boot
       - lambda: |-
+          reterminal::device_only = id(device_only_sw).state;
+          reterminal::radio_on = id(radio_sw).state;
+          reterminal::rtc_bad = ::time(nullptr) < reterminal::MIN_VALID_EPOCH;
           if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
             int p = (int) id(start_page).state - 1;
             reterminal::page = (p >= 0 && p < reterminal::PAGE_COUNT) ? p : 0;
           }
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+      - if:
+          condition:
+            lambda: 'return !reterminal::radio_on;'
+          then:
+            - wifi.disable:
       - lambda: 'reterminal::bump_awake(id(wake_time).state);'
       - script.execute: boot_flow
 
@@ -227,6 +237,8 @@ interval:
                   script.is_running: page_next
               - not:
                   script.is_running: page_prev
+              - not:
+                  script.is_running: net_refresh
           then:
             - deep_sleep.enter: deep_sleep_1
 
@@ -260,11 +272,63 @@ script:
     mode: single
     then:
       - script.execute: beep_short
+      # Green is the recovery path when the radio switch is off: enable wifi
+      # for this wake (the switch state is untouched)
       - if:
           condition:
+            lambda: 'return !reterminal::radio_on;'
+          then:
+            - wifi.enable:
+            - lambda: 'reterminal::radio_on = true;'
+      - wait_until:
+          condition:
             wifi.connected:
+          timeout: 10s
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !reterminal::device_only;'
           then:
             - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
+      - component.update: epaper_display
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+
+  # Network part of a wake: short waits (LAN), time request, fetch if the
+  # shown page needs it; ends with the wake's single redraw.
+  - id: net_refresh
+    mode: single
+    then:
+      - if:
+          condition:
+            lambda: 'return reterminal::radio_on;'
+          then:
+            - wait_until:
+                condition:
+                  wifi.connected:
+                timeout: 10s
+            - wait_until:
+                condition:
+                  api.connected:
+                timeout: 2s
+            # HA only sends time on request and the platform's 15 min
+            # polling never fires within a wake window
+            - lambda: 'id(ha_time).update();'
+            - wait_until:
+                condition:
+                  time.has_time:
+                timeout: 10s
+            # Let HA push sensor states
+            - delay: 1s
+            - if:
+                condition:
+                  lambda: |-
+                    return !reterminal::device_only &&
+                           (reterminal::wake_action() == reterminal::WAKE_FETCH ||
+                            (reterminal::fetch_due() &&
+                             reterminal::page_needs_history(reterminal::page)));
+                then:
+                  - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
       - component.update: epaper_display
       - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
@@ -286,14 +350,32 @@ script:
                   reterminal::prev_page();
                 else
                   reterminal::next_page();
+            - if:
+                condition:
+                  lambda: 'return reterminal::device_only;'
+                then:
+                  - lambda: 'reterminal::sample_device(id(temp_sensor).state, id(hum_sensor).state);'
             - component.update: epaper_display
             - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+            # A flip onto a data page with nothing to show yet earns a fetch
+            - if:
+                condition:
+                  lambda: 'return reterminal::page_data_empty(reterminal::page);'
+                then:
+                  - script.execute: net_refresh
           else:
             - if:
                 condition:
                   lambda: 'return reterminal::wake_action() == reterminal::WAKE_FETCH;'
                 then:
                   - script.execute: beep_short
+                  # Green also recovers from a disabled radio for one wake
+                  - if:
+                      condition:
+                        lambda: 'return !reterminal::radio_on;'
+                      then:
+                        - wifi.enable:
+                        - lambda: 'reterminal::radio_on = true;'
             # Advance first so the network decision matches the page shown
             - if:
                 condition:
@@ -302,6 +384,11 @@ script:
                     - lambda: 'return reterminal::wake_action() == reterminal::WAKE_TIMER;'
                 then:
                   - lambda: 'reterminal::next_page();'
+            - if:
+                condition:
+                  lambda: 'return reterminal::device_only;'
+                then:
+                  - lambda: 'reterminal::sample_device(id(temp_sensor).state, id(hum_sensor).state);'
             # Skip all network waits when the shown page needs no HA data and
             # the clock was synced within the last day
             - if:
@@ -310,29 +397,10 @@ script:
                     return reterminal::wake_action() == reterminal::WAKE_FETCH ||
                            reterminal::network_needed();
                 then:
-                  - wait_until:
-                      condition:
-                        api.connected:
-                      timeout: 20s
-                  # HA only sends time on request and the platform's 15 min
-                  # polling never fires within a wake window
-                  - lambda: 'id(ha_time).update();'
-                  - wait_until:
-                      condition:
-                        time.has_time:
-                      timeout: 10s
-                  # Give HA a moment to push sensor states
-                  - delay: 2s
-                  - if:
-                      condition:
-                        lambda: |-
-                          return reterminal::wake_action() == reterminal::WAKE_FETCH ||
-                                 (reterminal::fetch_due() &&
-                                  reterminal::page_needs_history(reterminal::page));
-                      then:
-                        - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
-            - component.update: epaper_display
-            - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+                  - script.execute: net_refresh
+                else:
+                  - component.update: epaper_display
+                  - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
 sensor:
   # --- SHT4x temperature & humidity (I2C) ---
@@ -541,6 +609,60 @@ button:
       - script.execute: do_fetch
 
 switch:
+  # Climate pages use only the onboard SHT4x, sampled once per wake; the
+  # in/out 24 h pages are skipped and no HA data is fetched. Toggling clears
+  # the graph history since the data sources are not comparable.
+  - platform: template
+    name: "Device Only"
+    id: device_only_sw
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::device_only = true;
+          reterminal::clear_history();
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_awake(id(wake_time).state);
+    on_turn_off:
+      - lambda: |-
+          reterminal::device_only = false;
+          reterminal::clear_history();
+          reterminal::bump_awake(id(wake_time).state);
+
+  # Radio kill switch, persists across reboots. While off the device is
+  # unreachable from HA — recover with the green button, which enables wifi
+  # for one wake without touching this switch.
+  - platform: template
+    name: "Radio"
+    id: radio_sw
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - wifi.enable:
+      - lambda: |-
+          reterminal::radio_on = true;
+          reterminal::bump_awake(id(wake_time).state);
+    on_turn_off:
+      - lambda: |-
+          reterminal::radio_on = false;
+          reterminal::bump_awake(id(wake_time).state);
+      - wifi.disable:
+
+  # Device temp/hum in the status bar ("T 25° H 48")
+  - platform: template
+    name: "Status Bar Climate"
+    id: bar_climate
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+    on_turn_off:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+
   # Pause deep sleep while tinkering. RAM only (ALWAYS_OFF): any reset or
   # power cycle re-enables deep sleep.
   - platform: template
@@ -693,7 +815,9 @@ display:
       }
       // no bar on the world clock (0) and noqte (6) pages
       if (reterminal::page != 0 && reterminal::page != 6)
-        reterminal::draw_status_bar(it, id(font_small), id(battery_level).state);
+        reterminal::draw_status_bar(it, id(font_small), id(battery_level).state,
+                                    id(temp_sensor).state, id(hum_sensor).state,
+                                    id(bar_climate).state, id(sd_card_detect).state);
 
 # =============================================================================
 # [10] Deep sleep / 深度睡眠
