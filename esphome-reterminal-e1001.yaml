@@ -294,26 +294,7 @@ script:
                   lambda: 'return reterminal::wake_action() == reterminal::WAKE_FETCH;'
                 then:
                   - script.execute: beep_short
-            - wait_until:
-                condition:
-                  api.connected:
-                timeout: 20s
-            # HA only sends time on request and the platform's 15 min polling
-            # never fires within a wake window, so request explicitly
-            - lambda: 'id(ha_time).update();'
-            - wait_until:
-                condition:
-                  time.has_time:
-                timeout: 10s
-            # Give HA a moment to push sensor states
-            - delay: 2s
-            - if:
-                condition:
-                  lambda: |-
-                    return reterminal::fetch_due() ||
-                           reterminal::wake_action() == reterminal::WAKE_FETCH;
-                then:
-                  - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
+            # Advance first so the network decision matches the page shown
             - if:
                 condition:
                   and:
@@ -321,6 +302,35 @@ script:
                     - lambda: 'return reterminal::wake_action() == reterminal::WAKE_TIMER;'
                 then:
                   - lambda: 'reterminal::next_page();'
+            # Skip all network waits when the shown page needs no HA data and
+            # the clock was synced within the last day
+            - if:
+                condition:
+                  lambda: |-
+                    return reterminal::wake_action() == reterminal::WAKE_FETCH ||
+                           reterminal::network_needed();
+                then:
+                  - wait_until:
+                      condition:
+                        api.connected:
+                      timeout: 20s
+                  # HA only sends time on request and the platform's 15 min
+                  # polling never fires within a wake window
+                  - lambda: 'id(ha_time).update();'
+                  - wait_until:
+                      condition:
+                        time.has_time:
+                      timeout: 10s
+                  # Give HA a moment to push sensor states
+                  - delay: 2s
+                  - if:
+                      condition:
+                        lambda: |-
+                          return reterminal::wake_action() == reterminal::WAKE_FETCH ||
+                                 (reterminal::fetch_due() &&
+                                  reterminal::page_needs_history(reterminal::page));
+                      then:
+                        - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
             - component.update: epaper_display
             - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
@@ -591,6 +601,7 @@ time:
     on_time_sync:
       then:
         - pcf8563.write_time:
+        - lambda: 'reterminal::time_sync_at = ::time(nullptr);'
 
 # Home Assistant native API / Home Assistant 原生 API
 api:

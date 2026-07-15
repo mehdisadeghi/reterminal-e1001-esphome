@@ -82,6 +82,22 @@ inline bool fetch_due() {
 inline void prev_page() { page = (page + PAGE_COUNT - 1) % PAGE_COUNT; }
 inline void next_page() { page = (page + 1) % PAGE_COUNT; }
 
+// --- Wake economics ---------------------------------------------------------
+
+RTC_DATA_ATTR time_t time_sync_at = 0;
+
+// page indices match the display lambda: 1 numbers, 2-4 graphs
+inline bool page_needs_history(int p) { return p >= 2 && p <= 4; }
+inline bool page_needs_live(int p) { return p == 1; }
+
+// Whether this wake should wait for the network at all: only when the shown
+// page consumes HA data or the clock has not been synced for a day.
+inline bool network_needed() {
+  time_t now = ::time(nullptr);
+  bool time_stale = now < MIN_VALID_EPOCH || time_sync_at == 0 || now - time_sync_at > 24 * 3600;
+  return time_stale || page_needs_live(page) || page_needs_history(page);
+}
+
 // --- History fetch ----------------------------------------------------------
 
 // days since 1970-01-01 (Howard Hinnant's days-from-civil)
