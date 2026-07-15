@@ -12,9 +12,10 @@ DIRS = packages reterminal
 
 .PHONY: deploy release test
 
-# Copy the builder file set to the HA host (secrets.yaml stays untouched)
+# Copy the builder file set to the HA host (secrets.yaml stays untouched).
+# tar-over-ssh: the HA SSH add-on has no rsync, but BusyBox tar is there.
 deploy:
-	rsync -av $(FILES) $(DIRS) $(USER)@$(HOST):$(TARGET_DIR)/
+	COPYFILE_DISABLE=1 tar cf - $(FILES) $(DIRS) | ssh $(USER)@$(HOST) "mkdir -p $(TARGET_DIR) && tar xvf - -C $(TARGET_DIR)"
 
 # Deploy, then compile + install from within the ESPHome add-on container.
 # Needs the SSH add-on with protection mode off (docker access), and the

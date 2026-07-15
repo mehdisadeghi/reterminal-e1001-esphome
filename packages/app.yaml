@@ -239,6 +239,10 @@ script:
     mode: single
     then:
       - script.execute: beep_short
+      # on the Khayyam page green means "another quatrain"
+      - lambda: |-
+          if (reterminal::page == 7)
+            reterminal::khayyam_reroll();
       - if:
           condition:
             lambda: 'return !reterminal::radio_on;'
@@ -357,7 +361,10 @@ script:
                       then:
                         - wifi.enable:
                         - lambda: 'reterminal::radio_on = true;'
-                  - lambda: 'reterminal::force_sync = true;'
+                  - lambda: |-
+                      if (reterminal::page == 7)
+                        reterminal::khayyam_reroll();
+                      reterminal::force_sync = true;
             # Advance first so the network decision matches the page shown
             - if:
                 condition:

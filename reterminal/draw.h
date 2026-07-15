@@ -186,9 +186,20 @@ inline void draw_marker(Display &it, int x, int y, int shape) {
 }
 
 // One legend item per enabled column: swatch (line style + marker) + label,
-// no values — those live on the numbers page. Items flow left to right with
-// a fixed gap; labels are measured so spacing stays even.
-inline void draw_legend(Display &it, BaseFont *f, int x, int y) {
+// no values — those live on the numbers page. Items flow with a fixed gap
+// (labels measured so spacing stays even), right-aligned to `right`.
+inline void draw_legend(Display &it, BaseFont *f, int right, int y) {
+  int total = 0;
+  for (int i = 0; i < MAX_COLS; i++) {
+    if (!cols[i].enabled)
+      continue;
+    int bx, by, bw, bh;
+    it.get_text_bounds(0, 0, cols[i].label, f, TextAlign::TOP_LEFT, &bx, &by, &bw, &bh);
+    total += 30 + bw + 22;
+  }
+  if (total == 0)
+    return;
+  int x = right - (total - 22);  // no trailing gap after the last item
   for (int i = 0; i < MAX_COLS; i++) {
     if (!cols[i].enabled)
       continue;
@@ -317,7 +328,7 @@ inline void draw_graph_page(Display &it, int metric, const char *title, BaseFont
   it.print(20, 4, med, TextAlign::TOP_LEFT, title);
   if (no_cols(it, med))
     return;
-  draw_legend(it, tiny_f, 330, 10);
+  draw_legend(it, tiny_f, 784, 10);
   draw_graph_band(it, series_day, metric, fetch_time, SPAN, med, tiny_f, 48, 420, true);
 }
 
@@ -331,7 +342,7 @@ inline void draw_week_page(Display &it, BaseFont *med, BaseFont *small_f, BaseFo
     localtime_r(&ha_fetch_at, &lt);
     it.printf(6, 6, tiny_f, TextAlign::TOP_LEFT, "data %02d:%02d", lt.tm_hour, lt.tm_min);
   }
-  draw_legend(it, tiny_f, 110, 6);
+  draw_legend(it, tiny_f, 784, 6);
 
   const struct {
     int metric;
@@ -467,6 +478,9 @@ inline void draw_analog_clocks(Display &it, BaseFont *med, BaseFont *small_f) {
 RTC_DATA_ATTR int khayyam_idx = -1;
 RTC_DATA_ATTR time_t khayyam_at = 0;
 constexpr time_t KHAYYAM_INTERVAL = 6 * 3600;
+
+// Green button on the Khayyam page: force a fresh pick at the next redraw.
+inline void khayyam_reroll() { khayyam_idx = -1; }
 
 inline void draw_khayyam(Display &it, BaseFont *title_f, BaseFont *body_f) {
   time_t now = ::time(nullptr);
