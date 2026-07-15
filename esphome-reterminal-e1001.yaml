@@ -5,10 +5,10 @@ substitutions:
   ha_api_token: !secret ha_api_token
 
 packages:
-  hardware: !include packages/hardware.yaml
-  network: !include packages/network.yaml
-  controls: !include packages/controls.yaml
-  app: !include packages/app.yaml
+  hardware: !include reterminal-e1001/packages/hardware.yaml
+  network: !include reterminal-e1001/packages/network.yaml
+  controls: !include reterminal-e1001/packages/controls.yaml
+  app: !include reterminal-e1001/packages/app.yaml
 
 esphome:
   name: ${device_name}
@@ -16,8 +16,8 @@ esphome:
   # reterminal/ (directory) is copied into the build; reterminal.h is the
   # umbrella the lambdas use
   includes:
-    - reterminal
-    - reterminal.h
+    - reterminal-e1001/reterminal
+    - reterminal-e1001/reterminal.h
   # Arduino libs for the HA history fetch; ESPHome builds with the library
   # dependency finder off, so they must be listed explicitly
   libraries:

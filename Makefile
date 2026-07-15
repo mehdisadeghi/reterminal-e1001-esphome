@@ -4,9 +4,8 @@ TARGET_DIR ?= /config/esphome
 DEVICE ?= reterminal-e1001.local
 
 YAML = esphome-reterminal-e1001.yaml
-FILES = $(YAML) partitions.csv reterminal.h noqte.ttf vazirmatn.ttf \
-        fa_glyphs.yaml fa_title_glyphs.yaml
-DIRS = packages reterminal
+FILES = $(YAML)
+DIRS = reterminal-e1001
 
 .PHONY: deploy release test
 
@@ -30,6 +29,6 @@ release: deploy
 
 # Host-side checks: pure-logic unit tests + example config validation
 test:
-	c++ -std=c++17 -DRETERMINAL_HOST_TEST -I reterminal tests/host_test.cpp -o /tmp/rt_test
+	c++ -std=c++17 -DRETERMINAL_HOST_TEST -I reterminal-e1001/reterminal tests/host_test.cpp -o /tmp/rt_test
 	/tmp/rt_test
 	python3 validate_config.py config.json.example

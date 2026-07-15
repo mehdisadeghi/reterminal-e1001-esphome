@@ -22,17 +22,17 @@ exists.
 | File | Purpose |
 |------|---------|
 | `esphome-reterminal-e1001.yaml` | Main config: substitutions, packages, boot orchestration |
-| `packages/*.yaml` | Config split by concern: hardware, network, controls, app (scripts/display) |
-| `reterminal.h` | Umbrella include used by the lambdas |
-| `reterminal/pure.h` | Host-testable logic: parsers, calendars, timezone math |
-| `reterminal/device.h` | RTC state, sleep bookkeeping, REST access, snapshots, SD stack |
-| `reterminal/draw.h` | Page renderers |
-| `reterminal/jalali.h` | Gregorian → Solar Hijri conversion (jdf algorithm) |
-| `reterminal/tzdata.h` | Embedded IANA-name → current-POSIX-rule table (generated) |
+| `reterminal-e1001/packages/*.yaml` | Config split by concern: hardware, network, controls, app |
+| `reterminal-e1001/reterminal.h` | Umbrella include used by the lambdas |
+| `reterminal-e1001/reterminal/pure.h` | Host-testable logic: parsers, calendars, timezone math |
+| `reterminal-e1001/reterminal/device.h` | RTC state, sleep, REST access, snapshots, SD stack |
+| `reterminal-e1001/reterminal/draw.h` | Page renderers |
+| `reterminal-e1001/reterminal/jalali.h` | Gregorian → Solar Hijri conversion (jdf algorithm) |
+| `reterminal-e1001/reterminal/tzdata.h` | Embedded IANA → POSIX-rule table (generated) |
 | `tests/host_test.cpp` | Host-side unit tests for `pure.h` (see header for the one-liner) |
-| `noqte.ttf`, `vazirmatn.ttf` | Persian fonts (test page, Khayyam titles/body) |
+| `reterminal-e1001/*.ttf`, `fa_*_glyphs.yaml` | Persian fonts + generated glyph lists |
 | `gen_fa_assets.py` | Pre-shapes the Khayyam corpus into `reterminal/khayyam_fa.h` + `fa_*_glyphs.yaml` |
-| `partitions.csv` | 32 MB flash layout: 2×3 MB OTA apps + 24 MB `hist` data partition |
+| `reterminal-e1001/partitions.csv` | 32 MB flash: 2×3 MB OTA apps + 24 MB `hist` partition |
 | `tzdata.csv` | Same tz data as a file — the SD-card override source |
 | `gen_tzdata.py` | Regenerates both from upstream tzdata (`uv run --with tzdata python3 gen_tzdata.py`) |
 | `validate_config.py` | Host-side `config.json` validator — mirrors the firmware's acceptance rules, cross-checks IANA names against `tzdata.csv` |
@@ -41,9 +41,9 @@ exists.
 | `sd-config-design.md` | Air-gapped SD-card configuration: design + implementation notes |
 | `config.json.example` | Template for the SD `config.json` |
 
-The main YAML, `packages/`, `reterminal.h`, the `reterminal/` directory,
-`partitions.csv`, and the font files must sit together in the ESPHome
-builder folder (copy the directories as-is).
+Only the main YAML and the `reterminal-e1001/` directory go to the
+ESPHome builder folder (`make deploy`); everything project-specific lives
+in that subfolder so the builder sees exactly one device.
 
 ## Pages
 

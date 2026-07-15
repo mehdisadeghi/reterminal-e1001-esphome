@@ -30,17 +30,17 @@ font:
     glyphs: *glyphs
   # Presentation forms of نقطه; printed in visual (RTL-reversed) order,
   # so no text shaping is needed
-  - file: "noqte.ttf"
+  - file: "reterminal-e1001/noqte.ttf"
     id: font_noqte
     size: 260
     glyphs: "ﻧﻘﻄﻪ"
   # Persian, pre-shaped at build time (gen_fa_assets.py); the glyph lists
   # are generated to exactly cover the corpus and title
-  - file: "vazirmatn.ttf"
+  - file: "reterminal-e1001/vazirmatn.ttf"
     id: font_fa_body
     size: 40
     glyphs: !include ../fa_glyphs.yaml
-  - file: "noqte.ttf"
+  - file: "reterminal-e1001/noqte.ttf"
     id: font_fa_title
     size: 64
     glyphs: !include ../fa_title_glyphs.yaml
