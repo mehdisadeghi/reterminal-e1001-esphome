@@ -2,8 +2,6 @@ HOST ?= homeassistant
 USER ?= $(shell id -un)
 TARGET_DIR ?= /config/esphome
 DEVICE ?= reterminal-e1001.local
-# ESPHome add-on container name on HAOS (official add-on slug)
-ADDON ?= addon_5c53de3b_esphome
 
 YAML = esphome-reterminal-e1001.yaml
 FILES = $(YAML) partitions.csv reterminal.h noqte.ttf vazirmatn.ttf \
@@ -17,11 +15,18 @@ DIRS = packages reterminal
 deploy:
 	COPYFILE_DISABLE=1 tar cf - $(FILES) $(DIRS) | ssh $(USER)@$(HOST) "mkdir -p $(TARGET_DIR) && tar xvf - -C $(TARGET_DIR)"
 
-# Deploy, then compile + install from within the ESPHome add-on container.
-# Needs the SSH add-on with protection mode off (docker access), and the
-# device awake for the OTA step (press a button first).
+# Deploy, then ask Home Assistant to build + OTA-install through the
+# ESPHome integration's firmware update entity (the add-on does the work).
+# Runs on the HA host via the supervisor's core API proxy; the device must
+# be awake for the OTA step (press a button, or use the keep-awake helper).
+UPDATE_ENTITY ?= update.reterminal_e1001_firmware
 release: deploy
-	ssh $(USER)@$(HOST) "docker exec $(ADDON) esphome run --no-logs --device $(DEVICE) $(TARGET_DIR)/$(YAML)"
+	ssh $(USER)@$(HOST) 'curl -sf -X POST \
+	  -H "Authorization: Bearer $$SUPERVISOR_TOKEN" \
+	  -H "Content-Type: application/json" \
+	  -d "{\"entity_id\": \"$(UPDATE_ENTITY)\"}" \
+	  http://supervisor/core/api/services/update/install' \
+	  && echo "release scheduled: HA is compiling and will OTA $(DEVICE)"
 
 # Host-side checks: pure-logic unit tests + example config validation
 test:
