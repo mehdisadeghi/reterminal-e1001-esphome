@@ -32,6 +32,7 @@ esphome:
   friendly_name: ${friendly_name}
   includes:
     - reterminal_epaper.h
+    - jalali.h
   # Arduino libs for the HA history fetch; ESPHome builds with the library
   # dependency finder off, so they must be listed explicitly
   libraries:
@@ -51,6 +52,13 @@ esphome:
       - component.update: battery_level
       # Read RTC time before anything needs the clock / 启动时读取 RTC 时间
       - pcf8563.read_time:
+      # Cold boot (not a deep-sleep wake): show the configured start page
+      - lambda: |-
+          if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
+            int p = (int) id(start_page).state - 1;
+            reterminal::page = (p >= 0 && p < reterminal::PAGE_COUNT) ? p : 0;
+          }
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
       - script.execute: boot_flow
 
 esp32:
@@ -83,10 +91,17 @@ font:
     id: font_large
     size: 48
     glyphs: *glyphs
+  # 60 so a winter "-10.5°C" still fits a third of the screen width
   - file: "gfonts://Inter@700"
     id: font_huge
-    size: 72
+    size: 60
     glyphs: *glyphs
+  # Presentation forms of نقطه; printed in visual (RTL-reversed) order,
+  # so no text shaping is needed
+  - file: "noqte.ttf"
+    id: font_noqte
+    size: 260
+    glyphs: "ﻧﻘﻄﻪ"
 
 # SPI — shared by ePaper display and SD card
 # SPI — 墨水屏和 SD 卡共用
@@ -137,6 +152,84 @@ output:
     pin: GPIO38
     id: mic_power_enable
 
+select:
+  # Home timezone for both world clock pages: gets the inversion and is the
+  # base for the displayed offsets. Options must match ZONES order.
+  - platform: template
+    name: "Home Timezone"
+    id: home_tz
+    optimistic: true
+    restore_value: true
+    initial_option: "Berlin"
+    options:
+      - "Tehran"
+      - "Berlin"
+      - "Memphis"
+      - "Mexico City"
+      - "Vancouver"
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::home_zone = (int) i;
+            reterminal::bump_awake(id(wake_time).state);
+
+number:
+  # Page shown after a cold boot (reset, reflash, power loss); 1-based.
+  # Values outside 1..PAGE_COUNT fall back to the first page.
+  - platform: template
+    name: "Start Page"
+    id: start_page
+    optimistic: true
+    restore_value: true
+    initial_value: 1
+    min_value: 1
+    max_value: 99
+    step: 1
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+
+  # Idle seconds before sleeping after the last activity; settable from HA
+  - platform: template
+    name: "Wake Time"
+    id: wake_time
+    optimistic: true
+    restore_value: true
+    initial_value: 60
+    min_value: 10
+    max_value: 300
+    step: 5
+    unit_of_measurement: "s"
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: 'reterminal::bump_awake(x);'
+
+interval:
+  # Enter sleep once wake_time has elapsed since the last activity and no
+  # command script is mid-flight
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            and:
+              - switch.is_off: sleep_pause
+              - lambda: 'return reterminal::sleep_due();'
+              - not:
+                  script.is_running: boot_flow
+              - not:
+                  script.is_running: do_fetch
+              - not:
+                  script.is_running: page_next
+              - not:
+                  script.is_running: page_prev
+          then:
+            - deep_sleep.enter: deep_sleep_1
+
 script:
   - id: beep_short
     mode: restart
@@ -153,6 +246,7 @@ script:
       - script.execute: beep_short
       - lambda: 'reterminal::prev_page();'
       - component.update: epaper_display
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
   - id: page_next
     mode: single
@@ -160,6 +254,7 @@ script:
       - script.execute: beep_short
       - lambda: 'reterminal::next_page();'
       - component.update: epaper_display
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
   - id: do_fetch
     mode: single
@@ -171,6 +266,7 @@ script:
           then:
             - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
       - component.update: epaper_display
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
   # Runs once per wake. Button wakes flip the page instantly with the values
   # cached in RTC memory; timer/green wakes wait for HA, fetch history when
@@ -191,6 +287,7 @@ script:
                 else
                   reterminal::next_page();
             - component.update: epaper_display
+            - lambda: 'reterminal::bump_awake(id(wake_time).state);'
           else:
             - if:
                 condition:
@@ -201,8 +298,15 @@ script:
                 condition:
                   api.connected:
                 timeout: 20s
-            # Give HA a moment to push sensor states after connecting
-            - delay: 3s
+            # HA only sends time on request and the platform's 15 min polling
+            # never fires within a wake window, so request explicitly
+            - lambda: 'id(ha_time).update();'
+            - wait_until:
+                condition:
+                  time.has_time:
+                timeout: 10s
+            # Give HA a moment to push sensor states
+            - delay: 2s
             - if:
                 condition:
                   lambda: |-
@@ -210,7 +314,15 @@ script:
                            reterminal::wake_action() == reterminal::WAKE_FETCH;
                 then:
                   - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
+            - if:
+                condition:
+                  and:
+                    - switch.is_on: auto_cycle
+                    - lambda: 'return reterminal::wake_action() == reterminal::WAKE_TIMER;'
+                then:
+                  - lambda: 'reterminal::next_page();'
             - component.update: epaper_display
+            - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
 sensor:
   # --- SHT4x temperature & humidity (I2C) ---
@@ -302,6 +414,34 @@ sensor:
             reterminal::last_val[reterminal::S_OUT_H] = x;
             reterminal::last_val_time = ::time(nullptr);
 
+text_sensor:
+  # "Press" queue: create an HA Button helper named "Press" with entity id
+  # input_button.reterminal_press. Its state is the timestamp of its last
+  # press, so pressing it while the device sleeps is queued (any number of
+  # presses collapse into the latest timestamp) and delivered on the next
+  # wake — one beep signals "awake now, ready to interact".
+  - platform: homeassistant
+    id: beep_request
+    entity_id: input_button.reterminal_press
+    on_value:
+      then:
+        - lambda: |-
+            time_t ts = reterminal::parse_iso_utc(x.c_str());
+            if (ts == 0)
+              return;
+            // after a reflash (ack lost) don't replay presses older than 15 min,
+            // but a press queued during the last sleep must still beep
+            if (reterminal::beep_ack == 0 && ts < ::time(nullptr) - 900) {
+              reterminal::beep_ack = ts;
+              return;
+            }
+            if (ts > reterminal::beep_ack) {
+              reterminal::beep_ack = ts;
+              ESP_LOGI("reterminal", "queued press received, beeping");
+              id(beep_short).execute();
+              reterminal::bump_awake(id(wake_time).state);
+            }
+
 binary_sensor:
   # The millis() gate skips the phantom on_press fired while booting from a
   # button wake — boot_flow already handles that press.
@@ -367,11 +507,63 @@ binary_sensor:
     id: sd_card_detect
     name: "SD Card Detected"
 
+button:
+  # One short beep, immediately (works only while the device is awake)
+  - platform: template
+    name: "Beep"
+    on_press:
+      - script.execute: beep_short
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+
+  # Emulated presses from HA / REST (device must be awake to receive them)
+  # "Page ..." prefix keeps them adjacent in HA's alphabetical Controls list
+  - platform: template
+    name: "Page Next"
+    on_press:
+      - script.execute: page_next
+  - platform: template
+    name: "Page Previous"
+    on_press:
+      - script.execute: page_prev
+  - platform: template
+    name: "Fetch History"
+    on_press:
+      - script.execute: do_fetch
+
+switch:
+  # Pause deep sleep while tinkering. RAM only (ALWAYS_OFF): any reset or
+  # power cycle re-enables deep sleep.
+  - platform: template
+    name: "Pause Deep Sleep"
+    id: sleep_pause
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+    on_turn_off:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+
+  # Advance one page per timer wake; toggleable from HA, survives deep sleep
+  - platform: template
+    name: "Page Auto-Cycle"
+    id: auto_cycle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+    on_turn_off:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+
 light:
   - platform: binary
     name: "Onboard LED"
     output: bsp_led
     id: onboard_led
+    on_turn_on:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+    on_turn_off:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
   # Buzzer wrapped as a "light": brightness = volume
   # 蜂鸣器包装成"灯"实体：亮度 = 音量
@@ -380,6 +572,10 @@ light:
     name: "Buzzer"
     id: buzzer
     default_transition_length: 0s
+    on_turn_on:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+    on_turn_off:
+      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
 
 time:
   # PCF8563 is at I2C address 0x51 with a CR1220 coin cell backup.
@@ -391,6 +587,7 @@ time:
     update_interval: never
 
   - platform: homeassistant
+    id: ha_time
     on_time_sync:
       then:
         - pcf8563.write_time:
@@ -404,6 +601,15 @@ api:
 ota:
   - platform: esphome
     password: !secret ota_password
+    # Never fall asleep mid-update
+    on_begin:
+      then:
+        - lambda: 'reterminal::ota_in_progress = true;'
+    on_error:
+      then:
+        - lambda: |-
+            reterminal::ota_in_progress = false;
+            reterminal::bump_awake(id(wake_time).state);
 
 # Wi-Fi settings / Wi-Fi 设置
 wifi:
@@ -452,27 +658,41 @@ display:
           break;
         case 1:
           reterminal::draw_numbers(it, id(font_huge), id(font_large), id(font_medium),
-                                   id(font_small), id(battery_level).state);
+                                   id(font_small), id(temp_sensor).state, id(hum_sensor).state);
           break;
         case 2:
           reterminal::draw_graph_page(it, reterminal::S_IN_T, reterminal::S_OUT_T,
-                                      "Temperature - 24h", "°C", id(font_medium), id(font_small));
+                                      "Temperature - 24h", "°C", id(font_medium), id(font_small),
+                                      0, 446);
           break;
         case 3:
           reterminal::draw_graph_page(it, reterminal::S_IN_H, reterminal::S_OUT_H,
-                                      "Humidity - 24h", "%", id(font_medium), id(font_small));
+                                      "Humidity - 24h", "%", id(font_medium), id(font_small),
+                                      0, 446);
+          break;
+        case 4:
+          reterminal::draw_week_page(it, id(font_medium), id(font_small));
+          break;
+        case 5:
+          reterminal::draw_analog_clocks(it, id(font_medium), id(font_small));
+          break;
+        case 6:
+          it.print(400, 240, id(font_noqte), TextAlign::CENTER, "ﻪﻄﻘﻧ");
           break;
       }
+      // no bar on the world clock (0) and noqte (6) pages
+      if (reterminal::page != 0 && reterminal::page != 6)
+        reterminal::draw_status_bar(it, id(font_small), id(battery_level).state);
 
 # =============================================================================
 # [10] Deep sleep / 深度睡眠
 # Wakes every 5 min to refresh; any button wakes it immediately.
 # =============================================================================
 
+# No run_duration: the arm_sleep script enters sleep wake_time seconds after
+# the last activity, so work (fetch, redraw, presses) always finishes first
 deep_sleep:
   id: deep_sleep_1
-  # Room for wifi + API connect + a history fetch + one e-paper refresh
-  run_duration: 45s
   sleep_duration: 5min
   esp32_ext1_wakeup:
     mode: ANY_LOW
