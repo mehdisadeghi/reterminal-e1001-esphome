@@ -1,0 +1,854 @@
+#pragma once
+
+// Device-side state and I/O: RTC memory, sleep bookkeeping, HA REST access,
+// flash snapshots, and the SD card stack.
+
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <SD.h>
+#include <SPI.h>
+#include <sys/time.h>
+#include <string>
+#include "esp_attr.h"
+#include "esp_partition.h"
+#include "esp_sleep.h"
+#include "esphome/core/log.h"
+#include "esphome/core/preferences.h"
+#include "pure.h"
+
+namespace reterminal {
+
+// --- History storage: int16 (value*100) so both windows fit RTC memory ------
+
+constexpr int16_t PT_NAN = INT16_MIN;
+
+inline float pt_get(int16_t v) { return v == PT_NAN ? NAN : v / 100.0f; }
+inline int16_t pt_set(float v) {
+  if (std::isnan(v) || v < -327.0f || v > 327.0f)
+    return PT_NAN;
+  return (int16_t) lroundf(v * 100.0f);
+}
+
+// State in RTC slow memory: survives deep sleep; restored from the flash
+// snapshot after a power loss or reflash.
+RTC_DATA_ATTR int page = 0;
+RTC_DATA_ATTR time_t fetch_time = 0;       // day window end; 0 = never rolled
+RTC_DATA_ATTR time_t week_fetch_time = 0;  // week window end
+RTC_DATA_ATTR time_t ha_fetch_at = 0;      // last successful HA history fetch
+RTC_DATA_ATTR int16_t series_day[MAX_COLS][2][POINTS];
+RTC_DATA_ATTR int16_t series_week[MAX_COLS][2][POINTS];
+RTC_DATA_ATTR float last_val[MAX_COLS][2] = {{NAN, NAN}, {NAN, NAN}, {NAN, NAN}};
+RTC_DATA_ATTR time_t last_val_time = 0;
+RTC_DATA_ATTR time_t ha_live_at = 0;  // last successful /api/states poll
+RTC_DATA_ATTR time_t beep_ack = 0;  // last handled "single beep" request
+RTC_DATA_ATTR time_t sync_attempt_at = 0;
+
+// Awake bookkeeping (plain RAM, reset each wake). Any command bumps the
+// deadline a short grace ahead; an interval enters sleep once it passes and
+// no script is running.
+constexpr uint32_t AWAKE_GRACE_MS = 2000;      // autonomous work: sleep right after
+constexpr uint32_t INTERACT_AWAKE_MS = 30000;  // user interaction: stay reachable
+static uint32_t sleep_deadline = 0;
+static bool ota_in_progress = false;
+
+inline void bump_awake_for(uint32_t ms) {
+  uint32_t d = millis() + ms;
+  if ((int32_t) (d - sleep_deadline) > 0)
+    sleep_deadline = d;
+}
+
+inline void bump_awake() { bump_awake_for(AWAKE_GRACE_MS); }
+
+// For handlers a user can trigger. Config-entity restores fire the same
+// on_value/on_turn_* hooks during the first seconds of every boot; real
+// commands can only arrive once the system is up, so gate on uptime.
+inline void bump_interact() {
+  bump_awake_for(millis() > 8000 ? INTERACT_AWAKE_MS : AWAKE_GRACE_MS);
+}
+
+inline bool sleep_due() { return !ota_in_progress && millis() > sleep_deadline; }
+
+// Mirrors of HA entities and boot diagnostics, set from YAML.
+static bool radio_on = true;      // wifi enabled this wake
+static bool rtc_bad = false;      // RTC chip unusable at boot (dead cell / VL / frozen)
+static time_t pre_rtc_time = 0;   // system time captured before the RTC read
+static bool force_sync = false;  // green button: sync + fetch now
+static int sync_interval_min = 15;
+static bool page_enabled_[PAGE_COUNT] = {true, true, true, true, true, true, true};
+
+inline bool page_hidden(int p) { return !page_enabled_[p]; }
+
+// Bounded loops: with every page hidden they fall back to page 0.
+inline void prev_page() {
+  for (int i = 0; i < PAGE_COUNT; i++) {
+    page = (page + PAGE_COUNT - 1) % PAGE_COUNT;
+    if (!page_hidden(page))
+      return;
+  }
+  page = 0;
+}
+inline void next_page() {
+  for (int i = 0; i < PAGE_COUNT; i++) {
+    page = (page + 1) % PAGE_COUNT;
+    if (!page_hidden(page))
+      return;
+  }
+  page = 0;
+}
+
+// --- Wake economics ----------------------------------------------------------
+
+enum WakeAction { WAKE_TIMER, WAKE_PREV, WAKE_NEXT, WAKE_FETCH };
+
+inline WakeAction wake_action() {
+  if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1)
+    return WAKE_TIMER;
+  uint64_t pins = esp_sleep_get_ext1_wakeup_status();
+  if (pins & (1ULL << 5))
+    return WAKE_PREV;  // left white
+  if (pins & (1ULL << 4))
+    return WAKE_NEXT;  // right white
+  if (pins & (1ULL << 3))
+    return WAKE_FETCH;  // green
+  return WAKE_TIMER;
+}
+
+// HA sync (API connect: time + queued helpers) runs on boot, on green, or
+// every sync_interval_min — not on every wake.
+inline bool sync_due() {
+  time_t now = ::time(nullptr);
+  if (now < MIN_VALID_EPOCH)
+    return true;
+  return sync_attempt_at == 0 || now - sync_attempt_at > (time_t) sync_interval_min * 60;
+}
+
+inline bool fetch_due() {
+  time_t now = ::time(nullptr);
+  if (now < MIN_VALID_EPOCH || !any_ha_col())
+    return false;
+  return ha_fetch_at == 0 || now - ha_fetch_at > FETCH_INTERVAL;
+}
+
+// page indices match the display lambda: 1 numbers, 2-4 graphs
+inline bool page_needs_live(int p) { return p == 1 && any_ha_col(); }
+inline bool page_needs_history(int p) { return p >= 2 && p <= 4 && any_ha_col(); }
+
+inline bool network_needed() {
+  return sync_due() || page_needs_live(page) || (page_needs_history(page) && fetch_due());
+}
+
+// A button flip onto a data page with missing or stale HA values earns a
+// refresh. Dev columns have their own per-wake sampling and never trigger it.
+inline bool page_data_empty(int p) {
+  if (p == 1) {
+    time_t now = ::time(nullptr);
+    return page_needs_live(p) && (ha_live_at == 0 || now - ha_live_at > 600);
+  }
+  if (p >= 2 && p <= 4)
+    return page_needs_history(p) && ha_fetch_at == 0;
+  return false;
+}
+
+// --- Window rolling & device sampling ----------------------------------------
+
+inline void roll_rows(int16_t rows[MAX_COLS][2][POINTS], time_t &end_t, time_t bucket,
+                      time_t now) {
+  if (end_t == 0 || now < end_t || now - end_t > bucket * POINTS) {
+    for (int c = 0; c < MAX_COLS; c++)
+      for (int m = 0; m < 2; m++)
+        for (int i = 0; i < POINTS; i++)
+          rows[c][m][i] = PT_NAN;
+    end_t = now;
+    return;
+  }
+  int shift = (int) ((now - end_t) / bucket);
+  if (shift == 0)
+    return;
+  for (int c = 0; c < MAX_COLS; c++)
+    for (int m = 0; m < 2; m++) {
+      memmove(&rows[c][m][0], &rows[c][m][shift], (POINTS - shift) * sizeof(int16_t));
+      for (int i = POINTS - shift; i < POINTS; i++)
+        rows[c][m][i] = PT_NAN;
+    }
+  end_t += (time_t) shift * bucket;
+}
+
+// Once per wake: slide both windows to `now` and sample dev columns into
+// their last bucket.
+inline void tick_data(float dev_t, float dev_h) {
+  time_t now = ::time(nullptr);
+  if (now < MIN_VALID_EPOCH)
+    return;
+  roll_rows(series_day, fetch_time, SPAN / POINTS, now);
+  roll_rows(series_week, week_fetch_time, SPAN_WEEK / POINTS, now);
+  bool any = false;
+  for (int i = 0; i < MAX_COLS; i++) {
+    if (!cols[i].enabled || !cols[i].is_dev)
+      continue;
+    if (std::isnan(dev_t) || std::isnan(dev_h))
+      continue;
+    series_day[i][M_TEMP][POINTS - 1] = pt_set(dev_t);
+    series_day[i][M_HUM][POINTS - 1] = pt_set(dev_h);
+    series_week[i][M_TEMP][POINTS - 1] = pt_set(dev_t);
+    series_week[i][M_HUM][POINTS - 1] = pt_set(dev_h);
+    last_val[i][M_TEMP] = dev_t;
+    last_val[i][M_HUM] = dev_h;
+    any = true;
+  }
+  if (any)
+    last_val_time = now;
+}
+
+// --- HA REST access -----------------------------------------------------------
+
+// Consumes the HA history JSON as a stream, splitting on '}' so no full-body
+// buffer is needed. minimal_response entries carry state and last_changed in
+// one chunk; the full first/last records get split by their attributes object,
+// so a state seen without a timestamp is held pending until its timestamp
+// arrives in the next chunk.
+class HistoryScanner : public Stream {
+ public:
+  HistoryScanner(time_t start, time_t bucket, double *sum, int *cnt)
+      : start_(start), bucket_(bucket), sum_(sum), cnt_(cnt) {}
+
+  size_t write(uint8_t c) override {
+    if (c == '}') {
+      buf_[len_] = 0;
+      this->entry_();
+      len_ = 0;
+    } else if (len_ < sizeof(buf_) - 1) {
+      buf_[len_++] = (char) c;
+    }
+    return 1;
+  }
+  size_t write(const uint8_t *data, size_t n) override {
+    for (size_t i = 0; i < n; i++)
+      this->write(data[i]);
+    return n;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+
+  float baseline = NAN;  // last state before the window start, seeds forward-fill
+
+ private:
+  static const char *value_(const char *key_end) {
+    while (*key_end == ':' || *key_end == ' ' || *key_end == '"')
+      key_end++;
+    return key_end;
+  }
+
+  void entry_() {
+    const char *s = strstr(buf_, "\"state\"");
+    const char *t = strstr(buf_, "\"last_changed\"");
+    bool has_val = false;
+    float val = NAN;
+    if (s != nullptr) {
+      const char *v = value_(s + 7);
+      char *end;
+      val = strtof(v, &end);
+      has_val = end != v;  // non-numeric state: unavailable/unknown
+    }
+    if (s != nullptr && t == nullptr) {  // first half of a split full record
+      pending_ = val;
+      pending_valid_ = has_val;
+      return;
+    }
+    if (t == nullptr)
+      return;
+    if (s == nullptr) {  // timestamp half of a split full record
+      if (!pending_valid_)
+        return;
+      val = pending_;
+      has_val = true;
+      pending_valid_ = false;
+    }
+    if (!has_val)
+      return;
+    time_t ts = parse_iso_utc(value_(t + 14));
+    if (ts == 0)
+      return;
+    if (ts < start_) {
+      baseline = val;
+      return;
+    }
+    long idx = (long) ((ts - start_) / bucket_);
+    if (idx >= POINTS)
+      idx = POINTS - 1;
+    sum_[idx] += val;
+    cnt_[idx]++;
+  }
+
+  time_t start_;
+  time_t bucket_;
+  double *sum_;
+  int *cnt_;
+  char buf_[512];
+  size_t len_ = 0;
+  float pending_ = NAN;
+  bool pending_valid_ = false;
+};
+
+inline bool fetch_entity(const char *base, const char *token, const char *entity, time_t start,
+                         time_t bucket, int16_t *out) {
+  static double sum[POINTS];
+  static int cnt[POINTS];
+  memset(sum, 0, sizeof(sum));
+  memset(cnt, 0, sizeof(cnt));
+
+  // end_time is mandatory: without it HA defaults the window to one day
+  char iso[24], iso_end[24];
+  struct tm tm_utc;
+  gmtime_r(&start, &tm_utc);
+  strftime(iso, sizeof(iso), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+  time_t end = start + bucket * POINTS;
+  gmtime_r(&end, &tm_utc);
+  strftime(iso_end, sizeof(iso_end), "%Y-%m-%dT%H:%M:%SZ", &tm_utc);
+  char url[300];
+  snprintf(url, sizeof(url),
+           "%s/api/history/period/%s?end_time=%s&filter_entity_id=%s&minimal_response&no_attributes",
+           base, iso, iso_end, entity);
+
+  HTTPClient http;
+  http.useHTTP10(true);
+  http.setConnectTimeout(5000);
+  http.setTimeout(15000);
+  if (!http.begin(url)) {
+    ESP_LOGW(TAG, "%s: http begin failed", entity);
+    return false;
+  }
+  char auth[300];
+  snprintf(auth, sizeof(auth), "Bearer %s", token);
+  http.addHeader("Authorization", auth);
+  int code = http.GET();
+  if (code != 200) {
+    ESP_LOGW(TAG, "%s: HTTP %d", entity, code);
+    http.end();
+    return false;
+  }
+  HistoryScanner scanner(start, bucket, sum, cnt);
+  http.writeToStream(&scanner);
+  http.end();
+
+  float prev = scanner.baseline;
+  int samples = 0;
+  for (int i = 0; i < POINTS; i++) {
+    if (cnt[i] > 0) {
+      prev = (float) (sum[i] / cnt[i]);
+      samples += cnt[i];
+    }
+    out[i] = pt_set(prev);  // forward-fill gaps; NAN until the first sample
+  }
+  ESP_LOGI(TAG, "%s: %d samples", entity, samples);
+  return samples > 0 || !std::isnan(scanner.baseline);
+}
+
+// Both windows for every HA-sourced column; rows commit individually so a
+// single failure keeps that row's previous (already rolled) data.
+inline bool fetch_history(const char *base, const char *token) {
+  time_t end = ::time(nullptr);
+  if (end < MIN_VALID_EPOCH) {
+    ESP_LOGW(TAG, "clock not set, skipping history fetch");
+    return false;
+  }
+  if (!any_ha_col())
+    return false;
+  roll_rows(series_day, fetch_time, SPAN / POINTS, end);
+  roll_rows(series_week, week_fetch_time, SPAN_WEEK / POINTS, end);
+  static int16_t row[POINTS];
+  bool all = true;
+  for (int c = 0; c < MAX_COLS; c++) {
+    if (!cols[c].enabled || cols[c].is_dev)
+      continue;
+    const char *ent[2] = {cols[c].temp_entity, cols[c].hum_entity};
+    for (int m = 0; m < 2; m++) {
+      if (fetch_entity(base, token, ent[m], end - SPAN, SPAN / POINTS, row))
+        memcpy(series_day[c][m], row, sizeof(row));
+      else
+        all = false;
+      if (fetch_entity(base, token, ent[m], end - SPAN_WEEK, SPAN_WEEK / POINTS, row))
+        memcpy(series_week[c][m], row, sizeof(row));
+      else
+        all = false;
+    }
+  }
+  if (all) {
+    ha_fetch_at = end;
+    ESP_LOGI(TAG, "history updated");
+  } else {
+    ESP_LOGW(TAG, "history fetch incomplete");
+  }
+  return all;
+}
+
+// Captures the first bytes of a response body (enough for /api/states).
+class CaptureStream : public Stream {
+ public:
+  size_t write(uint8_t c) override {
+    if (len_ < sizeof(buf_) - 1)
+      buf_[len_++] = (char) c;
+    return 1;
+  }
+  size_t write(const uint8_t *d, size_t n) override {
+    for (size_t i = 0; i < n; i++)
+      this->write(d[i]);
+    return n;
+  }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+  const char *c_str() {
+    buf_[len_] = 0;
+    return buf_;
+  }
+
+ private:
+  char buf_[512];
+  size_t len_ = 0;
+};
+
+// Current values of HA-sourced columns via /api/states; transport identical
+// to the (proven) history fetch.
+inline void poll_live(const char *base, const char *token) {
+  bool any = false;
+  for (int c = 0; c < MAX_COLS; c++) {
+    if (!cols[c].enabled || cols[c].is_dev)
+      continue;
+    const char *ent[2] = {cols[c].temp_entity, cols[c].hum_entity};
+    for (int m = 0; m < 2; m++) {
+      char url[192];
+      snprintf(url, sizeof(url), "%s/api/states/%s", base, ent[m]);
+      HTTPClient http;
+      http.useHTTP10(true);
+      http.setConnectTimeout(5000);
+      http.setTimeout(8000);
+      if (!http.begin(url)) {
+        ESP_LOGW(TAG, "%s: http begin failed", ent[m]);
+        continue;
+      }
+      char auth[300];
+      snprintf(auth, sizeof(auth), "Bearer %s", token);
+      http.addHeader("Authorization", auth);
+      int code = http.GET();
+      if (code == 200) {
+        CaptureStream cap;
+        http.writeToStream(&cap);
+        const char *p = strstr(cap.c_str(), "\"state\"");
+        if (p != nullptr) {
+          p += 7;
+          while (*p == ':' || *p == ' ' || *p == '"')
+            p++;
+          char *endp;
+          float v = strtof(p, &endp);
+          if (endp != p) {
+            last_val[c][m] = v;
+            any = true;
+            ESP_LOGI(TAG, "%s: live %.2f", ent[m], v);
+          } else {
+            ESP_LOGW(TAG, "%s: non-numeric state", ent[m]);
+          }
+        } else {
+          ESP_LOGW(TAG, "%s: no state in response", ent[m]);
+        }
+      } else {
+        ESP_LOGW(TAG, "%s: HTTP %d", ent[m], code);
+      }
+      http.end();
+    }
+  }
+  if (any) {
+    last_val_time = ::time(nullptr);
+    ha_live_at = last_val_time;
+  }
+}
+
+// --- History snapshots on the flash data partition ---------------------------
+// Survive power loss and reflash; the 24 MB "hist" partition as a slot ring
+// makes wear negligible (one erase cycle per slot every ~4 months at hourly
+// snapshots).
+
+constexpr uint32_t SNAP_MAGIC = 0x48545231;
+constexpr uint32_t SNAP_SLOT = 8192;
+constexpr time_t SNAP_INTERVAL = 3600;
+
+struct Snapshot {
+  uint32_t magic;
+  uint32_t seq;
+  int64_t day_end, week_end, ha_fetch, lv_time;
+  float lv[MAX_COLS][2];
+  int16_t day[MAX_COLS][2][POINTS];
+  int16_t week[MAX_COLS][2][POINTS];
+  uint32_t crc;
+};
+
+static const esp_partition_t *hist_part = nullptr;
+RTC_DATA_ATTR uint32_t snap_seq = 0;
+RTC_DATA_ATTR time_t snap_at = 0;
+
+inline Snapshot &snap_buf() {
+  static Snapshot s;
+  return s;
+}
+
+inline uint32_t crc32_buf(const void *data, size_t len) {
+  const uint8_t *b = (const uint8_t *) data;
+  uint32_t c = 0xFFFFFFFF;
+  for (size_t i = 0; i < len; i++) {
+    c ^= b[i];
+    for (int k = 0; k < 8; k++)
+      c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u)));
+  }
+  return ~c;
+}
+
+inline uint32_t snap_crc(const Snapshot &s) { return crc32_buf(&s, offsetof(Snapshot, crc)); }
+
+inline void snapshot_save() {
+  if (hist_part == nullptr)
+    return;
+  Snapshot &s = snap_buf();
+  s.magic = SNAP_MAGIC;
+  s.seq = ++snap_seq;
+  s.day_end = fetch_time;
+  s.week_end = week_fetch_time;
+  s.ha_fetch = ha_fetch_at;
+  s.lv_time = last_val_time;
+  memcpy(s.lv, last_val, sizeof(s.lv));
+  memcpy(s.day, series_day, sizeof(s.day));
+  memcpy(s.week, series_week, sizeof(s.week));
+  s.crc = snap_crc(s);
+  uint32_t slots = hist_part->size / SNAP_SLOT;
+  uint32_t off = (s.seq % slots) * SNAP_SLOT;
+  if (esp_partition_erase_range(hist_part, off, SNAP_SLOT) != ESP_OK ||
+      esp_partition_write(hist_part, off, &s, sizeof(s)) != ESP_OK) {
+    ESP_LOGW(TAG, "history snapshot write failed");
+    return;
+  }
+  snap_at = ::time(nullptr);
+  ESP_LOGI(TAG, "history snapshot %u saved", s.seq);
+}
+
+inline void maybe_snapshot() {
+  time_t now = ::time(nullptr);
+  if (hist_part == nullptr || now < MIN_VALID_EPOCH)
+    return;
+  if (snap_at != 0 && now - snap_at < SNAP_INTERVAL)
+    return;
+  snapshot_save();
+}
+
+inline void snapshot_restore() {
+  if (hist_part == nullptr)
+    return;
+  uint32_t slots = hist_part->size / SNAP_SLOT;
+  uint32_t best_seq = 0;
+  long best = -1;
+  for (uint32_t i = 0; i < slots; i++) {
+    uint32_t hdr[2];
+    if (esp_partition_read(hist_part, i * SNAP_SLOT, hdr, sizeof(hdr)) != ESP_OK)
+      continue;
+    if (hdr[0] == SNAP_MAGIC && hdr[1] >= best_seq) {
+      best_seq = hdr[1];
+      best = (long) i;
+    }
+  }
+  if (best < 0)
+    return;
+  Snapshot &s = snap_buf();
+  if (esp_partition_read(hist_part, (uint32_t) best * SNAP_SLOT, &s, sizeof(s)) != ESP_OK)
+    return;
+  if (s.magic != SNAP_MAGIC || s.crc != snap_crc(s)) {
+    ESP_LOGW(TAG, "history snapshot %u corrupt, ignored", s.seq);
+    return;
+  }
+  fetch_time = (time_t) s.day_end;
+  week_fetch_time = (time_t) s.week_end;
+  ha_fetch_at = (time_t) s.ha_fetch;
+  last_val_time = (time_t) s.lv_time;
+  memcpy(last_val, s.lv, sizeof(s.lv));
+  memcpy(series_day, s.day, sizeof(s.day));
+  memcpy(series_week, s.week, sizeof(s.week));
+  snap_seq = s.seq;
+  ESP_LOGI(TAG, "history snapshot %u restored", s.seq);
+}
+
+// cold = not a deep-sleep wake: RTC memory is empty, restore from flash
+inline void hist_init(bool cold) {
+  hist_part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "hist");
+  if (hist_part == nullptr)
+    ESP_LOGW(TAG, "hist partition not found, snapshots disabled");
+  else if (cold)
+    snapshot_restore();
+}
+
+// --- SD card: mount + tzdata override ----------------------------------------
+// The card sits on the display's SPI bus (FAT32 via the Arduino SD library).
+// Pins mirror the yaml spi:/detect config.
+
+constexpr int SD_SCK = 7, SD_MISO = 8, SD_MOSI = 9, SD_CS = 14;
+
+static bool sd_mounted = false;
+static bool sd_error = false;         // last processing attempt failed
+static bool sd_time_was_set = false;  // set_time applied; RTC write pending
+static std::string pending_changes;   // key=value change-set awaiting apply
+
+inline bool sd_mount() {
+  if (sd_mounted)
+    return true;
+  SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  if (!SD.begin(SD_CS)) {
+    ESP_LOGW(TAG, "SD mount failed");
+    return false;
+  }
+  sd_mounted = true;
+  ESP_LOGI(TAG, "SD mounted");
+  return true;
+}
+
+// /tzdata.csv on the card overrides the embedded IANA table (data file, not
+// config; regenerate with gen_tzdata.py). Loaded once per boot.
+
+inline void sd_load_tzdata() {
+  if (tz_ovr_buf != nullptr)
+    return;
+  File f = SD.open("/tzdata.csv");
+  if (!f)
+    return;
+  size_t sz = f.size();
+  if (sz == 0 || sz > 64 * 1024) {
+    f.close();
+    return;
+  }
+  tz_ovr_buf = (char *) malloc(sz + 1);
+  if (tz_ovr_buf == nullptr) {
+    f.close();
+    return;
+  }
+  f.read((uint8_t *) tz_ovr_buf, sz);
+  f.close();
+  tz_ovr_buf[sz] = 0;
+  char *p = tz_ovr_buf;
+  while (*p) {
+    char *name = p;
+    char *comma = strchr(p, ',');
+    char *nl = strchr(p, '\n');
+    if (nl == nullptr)
+      nl = p + strlen(p);
+    if (comma != nullptr && comma < nl) {
+      *comma = 0;
+      char *posix = comma + 1;
+      if (*nl)
+        *nl = 0;
+      if (nl > posix && nl[-1] == '\r')
+        nl[-1] = 0;
+      tz_ovr.push_back({name, posix});
+    }
+    p = nl + (*nl == 0 ? 0 : 1);
+    if (*nl == 0)
+      break;
+  }
+  ESP_LOGI(TAG, "tzdata override: %d zones from SD", (int) tz_ovr.size());
+}
+
+// --- SD config.json: validate, convert to the change-set, back up ------------
+
+// Dated copy of the applied config; keep the newest 5.
+inline void sd_backup(const String &body) {
+  time_t now = ::time(nullptr);
+  if (now < MIN_VALID_EPOCH)
+    return;
+  struct tm lt;
+  localtime_r(&now, &lt);
+  char name[32];
+  strftime(name, sizeof(name), "/%Y-%m-%d.config.json", &lt);
+  SD.remove(name);
+  File b = SD.open(name, FILE_WRITE);
+  if (!b) {
+    ESP_LOGW(TAG, "SD backup failed");
+    return;
+  }
+  b.print(body);
+  b.close();
+  char names[16][28];
+  int n = 0;
+  File root = SD.open("/");
+  for (File e = root.openNextFile(); e && n < 16; e = root.openNextFile()) {
+    const char *fn = e.name();
+    size_t l = strlen(fn);
+    if (l > 12 && l < 27 && strcmp(fn + l - 12, ".config.json") == 0 &&
+        strcasecmp(fn, "config.json") != 0)
+      snprintf(names[n++], sizeof(names[0]), "%s", fn);
+    e.close();
+  }
+  root.close();
+  for (int i = 1; i < n; i++)  // names sort chronologically
+    for (int j = i; j > 0 && strcmp(names[j - 1], names[j]) > 0; j--)
+      std::swap(names[j - 1], names[j]);
+  for (int i = 0; i < n - 5; i++) {
+    char path[32];
+    snprintf(path, sizeof(path), "/%s", names[i]);
+    SD.remove(path);
+  }
+}
+
+// Reads /config.json when its content changed since the last applied one;
+// validates everything, applies set_time, and returns the change-set for the
+// shared apply path ("" = nothing to do; sd_error = file rejected).
+inline std::string sd_process() {
+  sd_error = false;
+  if (!sd_mount())
+    return "";
+  sd_load_tzdata();
+  File f = SD.open("/config.json");
+  if (!f)
+    return "";
+  String body = f.readString();
+  f.close();
+  if (body.length() == 0 || body.length() > 8192) {
+    sd_error = true;
+    return "";
+  }
+  uint32_t crc = crc32_buf(body.c_str(), body.length());
+  auto pref = esphome::global_preferences->make_preference<uint32_t>(0x53444346);
+  uint32_t last = 0;
+  pref.load(&last);
+  if (crc == last)
+    return "";
+
+  DynamicJsonDocument doc(16384);
+  if (deserializeJson(doc, body) != DeserializationError::Ok || (int) (doc["version"] | 0) != 1) {
+    ESP_LOGW(TAG, "SD config: invalid JSON or version");
+    sd_error = true;
+    return "";
+  }
+
+  std::string ch;
+  auto add = [&](const char *kv) {
+    if (!ch.empty())
+      ch += ';';
+    ch += kv;
+  };
+
+  if (doc["zones"].is<JsonArray>()) {
+    JsonArray za = doc["zones"].as<JsonArray>();
+    if (za.size() < 1 || za.size() > (size_t) MAX_ZONES) {
+      sd_error = true;
+      return "";
+    }
+    int zi = 0;
+    for (JsonObject z : za) {
+      char spec[64];
+      if (z["tz"].is<const char *>()) {
+        const char *label = z["label"] | "";
+        if (label[0])
+          snprintf(spec, sizeof(spec), "%s=%s", label, (const char *) z["tz"]);
+        else
+          snprintf(spec, sizeof(spec), "%s", (const char *) z["tz"]);
+      } else if (z["dst_start"].is<JsonObject>()) {
+        snprintf(spec, sizeof(spec), "%s|%d|%d|%d.%d/%d|%d.%d/%d",
+                 (const char *) (z["city"] | ""), (int) (z["std_offset_min"] | 0),
+                 (int) (z["dst_offset_min"] | 0), (int) z["dst_start"]["month"],
+                 (int) z["dst_start"]["week"], (int) z["dst_start"]["hour"],
+                 (int) z["dst_end"]["month"], (int) z["dst_end"]["week"],
+                 (int) z["dst_end"]["hour"]);
+      } else {
+        snprintf(spec, sizeof(spec), "%s|%d", (const char *) (z["city"] | ""),
+                 (int) (z["std_offset_min"] | 0));
+      }
+      Zone tmp;
+      if (!parse_zone(spec, tmp)) {
+        ESP_LOGW(TAG, "SD config: bad zone '%s'", spec);
+        sd_error = true;
+        return "";
+      }
+      char kv[80];
+      snprintf(kv, sizeof(kv), "zone%d=%s", ++zi, spec);
+      add(kv);
+    }
+    while (zi < MAX_ZONES) {
+      char kv[12];
+      snprintf(kv, sizeof(kv), "zone%d=", ++zi);
+      add(kv);
+    }
+  }
+
+  if (doc["columns"].is<JsonArray>()) {
+    JsonArray ca = doc["columns"].as<JsonArray>();
+    if (ca.size() < 1 || ca.size() > (size_t) MAX_COLS) {
+      sd_error = true;
+      return "";
+    }
+    int ci = 0;
+    for (JsonObject c : ca) {
+      char spec[144];
+      snprintf(spec, sizeof(spec), "%s=%s", (const char *) (c["label"] | ""),
+               (const char *) (c["source"] | ""));
+      Column tmp{};
+      if (!parse_column(spec, tmp)) {
+        ESP_LOGW(TAG, "SD config: bad column '%s'", spec);
+        sd_error = true;
+        return "";
+      }
+      char kv[160];
+      snprintf(kv, sizeof(kv), "col%d=%s", ++ci, spec);
+      add(kv);
+    }
+    while (ci < MAX_COLS) {
+      char kv[8];
+      snprintf(kv, sizeof(kv), "col%d=", ++ci);
+      add(kv);
+    }
+  }
+
+  char kv[64];
+  if (doc["home_zone"].is<const char *>()) {
+    snprintf(kv, sizeof(kv), "home=%s", (const char *) doc["home_zone"]);
+    add(kv);
+  }
+  if (doc["night_from"].is<int>() && doc["night_to"].is<int>()) {
+    snprintf(kv, sizeof(kv), "night=%d-%d", (int) doc["night_from"], (int) doc["night_to"]);
+    add(kv);
+  }
+  if (doc["start_page"].is<int>()) {
+    snprintf(kv, sizeof(kv), "start=%d", (int) doc["start_page"]);
+    add(kv);
+  }
+  if (doc["sync_interval_min"].is<int>()) {
+    snprintf(kv, sizeof(kv), "sync=%d", (int) doc["sync_interval_min"]);
+    add(kv);
+  }
+  if (doc["show_pages"].is<JsonArray>()) {
+    JsonArray sp = doc["show_pages"].as<JsonArray>();
+    for (int i = 0; i < PAGE_COUNT && i < (int) sp.size(); i++) {
+      snprintf(kv, sizeof(kv), "show%d=%s", i + 1, sp[i].as<bool>() ? "on" : "off");
+      add(kv);
+    }
+  }
+
+  // one-shot air-gapped clock set: applied only when the value changes
+  if (doc["set_time"].is<const char *>()) {
+    time_t ts = parse_iso_utc(doc["set_time"]);
+    auto tp = esphome::global_preferences->make_preference<int64_t>(0x53445354);
+    int64_t last_ts = 0;
+    tp.load(&last_ts);
+    if (ts > 0 && (int64_t) ts != last_ts) {
+      struct timeval tv = {.tv_sec = ts, .tv_usec = 0};
+      settimeofday(&tv, nullptr);
+      last_ts = (int64_t) ts;
+      tp.save(&last_ts);
+      sd_time_was_set = true;
+      ESP_LOGI(TAG, "SD config: clock set from set_time");
+    }
+  }
+
+  pref.save(&crc);
+  esphome::global_preferences->sync();
+  sd_backup(body);
+  ESP_LOGI(TAG, "SD config accepted (%d bytes)", (int) body.length());
+  return ch;
+}
+
+
+}  // namespace reterminal

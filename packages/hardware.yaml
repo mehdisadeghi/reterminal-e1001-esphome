@@ -1,0 +1,182 @@
+# reTerminal E1001 — hardware package (merged by packages: in the main yaml)
+
+# flash_size + partitions change the partition table: the first install of
+# this build must go over USB (OTA cannot rewrite the table)
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 32MB
+  partitions: partitions.csv
+  framework:
+    type: arduino
+    advanced:
+      # required for OTA on 32 MB flash
+      enable_idf_experimental_features: true
+    sdkconfig_options:
+      # directory VFS calls for the SD (FAT32) filesystem
+      CONFIG_VFS_SUPPORT_DIR: "y"
+
+# Enable serial logging / 启用串口日志
+# The reTerminal E series has a CH340K USB-to-UART bridge on UART0.
+# Default ESP32-S3 logger uses USB_CDC — won't produce output on the physical port.
+# reTerminal E 系列板载 CH340K 桥接芯片，串口走 UART0，非默认的 USB_CDC。
+logger:
+  hardware_uart: UART0
+
+# Provides ArduinoJson for the SD config parser
+json:
+
+# SPI — shared by ePaper display and SD card
+# SPI — 墨水屏和 SD 卡共用
+spi:
+  clk_pin: GPIO7
+  mosi_pin: GPIO9
+  # MISO is needed for SD card reading (ePaper is write-only)
+  # MISO 用于 SD 卡读取（墨水屏只写不读）
+  miso_pin: GPIO8
+
+# I2C — shared by SHT4x sensor, PCF8563 RTC
+# I2C — SHT4x 传感器和 PCF8563 实时时钟共用
+i2c:
+  scl: GPIO20
+  sda: GPIO19
+
+# I2S audio bus — for the onboard PDM microphone
+# I2S 音频总线 — 用于板载 PDM 麦克风
+i2s_audio:
+  i2s_lrclk_pin: GPIO42
+
+output:
+  # [4] Onboard LED (active low) / 板载 LED（低电平有效）
+  - platform: gpio
+    pin: GPIO6
+    id: bsp_led
+    inverted: true
+
+  # [9] SD card power enable / SD 卡供电使能
+  - platform: gpio
+    pin: GPIO16
+    id: bsp_sd_enable
+
+  # [5] Battery measurement enable / 电池测量使能
+  - platform: gpio
+    pin: GPIO21
+    id: bsp_battery_enable
+
+  # [3] Buzzer PWM output / 蜂鸣器 PWM 输出
+  - platform: ledc
+    pin: GPIO45
+    id: buzzer_pwm
+    frequency: 1000Hz
+
+  # [8] Microphone power enable (TPS22916 load switch)
+  # 麦克风供电使能（TPS22916 负载开关）
+  - platform: gpio
+    pin: GPIO38
+    id: mic_power_enable
+
+sensor:
+  # --- SHT4x temperature & humidity (I2C) ---
+  - platform: sht4x
+    temperature:
+      name: "Temperature"
+      id: temp_sensor
+    humidity:
+      name: "Relative Humidity"
+      id: hum_sensor
+    update_interval: 60s
+
+  # --- Battery voltage (ADC on GPIO1) ---
+  - platform: adc
+    pin: GPIO1
+    name: "Battery Voltage"
+    id: battery_voltage
+    update_interval: 60s
+    attenuation: 12db
+    filters:
+      # Compensate for onboard voltage divider (1:2)
+      # 补偿板载分压电阻（1:2 比例）
+      - multiply: 2.0
+
+  # --- Battery level (percentage) ---
+  - platform: template
+    name: "Battery Level"
+    id: battery_level
+    unit_of_measurement: "%"
+    icon: "mdi:battery"
+    device_class: battery
+    state_class: measurement
+    lambda: 'return id(battery_voltage).state;'
+    update_interval: 60s
+    filters:
+      - calibrate_linear:
+          - 4.15 -> 100.0
+          - 3.96 -> 90.0
+          - 3.91 -> 80.0
+          - 3.85 -> 70.0
+          - 3.80 -> 60.0
+          - 3.75 -> 50.0
+          - 3.68 -> 40.0
+          - 3.58 -> 30.0
+          - 3.49 -> 20.0
+          - 3.41 -> 10.0
+          - 3.30 -> 5.0
+          - 3.27 -> 0.0
+      - clamp:
+          min_value: 0
+          max_value: 100
+
+light:
+  - platform: binary
+    name: "Onboard LED"
+    output: bsp_led
+    id: onboard_led
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'
+
+  # Buzzer wrapped as a "light": brightness = volume
+  # 蜂鸣器包装成"灯"实体：亮度 = 音量
+  - platform: monochromatic
+    output: buzzer_pwm
+    name: "Buzzer"
+    id: buzzer
+    default_transition_length: 0s
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'
+
+# =============================================================================
+# [8] PDM Microphone / PDM 麦克风
+# =============================================================================
+
+microphone:
+  - platform: i2s_audio
+    id: onboard_mic
+    adc_type: external
+    pdm: true
+    i2s_din_pin: GPIO41
+
+# =============================================================================
+# [10] Deep sleep / 深度睡眠
+# Wakes every 5 min to refresh; any button wakes it immediately.
+# =============================================================================
+
+# No run_duration: the watcher interval enters sleep a short grace after the
+# last activity, so work (fetch, redraw, presses) always finishes first
+deep_sleep:
+  id: deep_sleep_1
+  sleep_duration: 5min
+  esp32_ext1_wakeup:
+    mode: ANY_LOW
+    pins:
+      - number: GPIO3
+        mode: INPUT_PULLUP
+        allow_other_uses: true
+      - number: GPIO4
+        mode: INPUT_PULLUP
+        allow_other_uses: true
+      - number: GPIO5
+        mode: INPUT_PULLUP
+        allow_other_uses: true

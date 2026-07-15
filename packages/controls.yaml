@@ -1,0 +1,486 @@
+# reTerminal E1001 — controls package (merged by packages: in the main yaml)
+
+# World clock zones as editable data. Accepted forms per zone:
+#   "Asia/Tehran"                       IANA name (embedded tzdata table)
+#   "Memphis=America/Chicago"           IANA name with a custom label
+#   "City|std_min"                      fixed offset, minutes east of UTC
+#   "City|std_min|dst_min|m.w/h|m.w/h"  manual DST rules (week 5 = last Sunday)
+# Empty slot = unused; invalid specs are skipped (see logs).
+text:
+  - platform: template
+    name: "Zone 1"
+    id: zone_1
+    optimistic: true
+    restore_value: true
+    initial_value: "Asia/Tehran"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 2"
+    id: zone_2
+    optimistic: true
+    restore_value: true
+    initial_value: "Europe/Berlin"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 3"
+    id: zone_3
+    optimistic: true
+    restore_value: true
+    initial_value: "Memphis=America/Chicago"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 4"
+    id: zone_4
+    optimistic: true
+    restore_value: true
+    initial_value: "America/Mexico_City"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 5"
+    id: zone_5
+    optimistic: true
+    restore_value: true
+    initial_value: "America/Vancouver"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+
+  # Matched against the zone cities by name; the match gets the inversion
+  # and is the base for the displayed offsets
+  - platform: template
+    name: "Home Timezone"
+    id: home_tz
+    optimistic: true
+    restore_value: true
+    initial_value: "Berlin"
+    max_length: 20
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+
+  # Climate columns (numbers page + graph lines), sources as data:
+  #   "Label=dev"                          onboard SHT4x, sampled locally
+  #   "Label=<temp_entity>,<hum_entity>"   polled from HA over REST
+  # Empty = column disabled. All-dev configs never touch the network.
+  - platform: template
+    name: "Column 1"
+    id: col_1
+    optimistic: true
+    restore_value: true
+    initial_value: "Device=dev"
+    max_length: 160
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: cols_changed
+  - platform: template
+    name: "Column 2"
+    id: col_2
+    optimistic: true
+    restore_value: true
+    initial_value: "Indoor=sensor.indoor_temperature,sensor.indoor_humidity"
+    max_length: 160
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: cols_changed
+  - platform: template
+    name: "Column 3"
+    id: col_3
+    optimistic: true
+    restore_value: true
+    initial_value: "Outdoor=sensor.outdoor_temperature,sensor.outdoor_humidity"
+    max_length: 160
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: cols_changed
+
+  # HA REST endpoint; seeded from secrets on first flash, editable ever after
+  - platform: template
+    name: "HA URL"
+    id: ha_url
+    optimistic: true
+    restore_value: true
+    initial_value: "http://${ha_http_ip}:8123"
+    max_length: 64
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - lambda: 'reterminal::bump_interact();'
+  - platform: template
+    name: "HA Token"
+    id: ha_token
+    optimistic: true
+    restore_value: true
+    initial_value: "${ha_api_token}"
+    max_length: 255
+    mode: password
+    entity_category: config
+    on_value:
+      then:
+        - lambda: 'reterminal::bump_interact();'
+
+number:
+  # Minutes between HA syncs (API connect: time + queued helpers). Green
+  # button and cold boot always sync.
+  - platform: template
+    name: "HA Sync Interval"
+    id: sync_interval
+    optimistic: true
+    restore_value: true
+    initial_value: 15
+    min_value: 1
+    max_value: 1440
+    step: 1
+    unit_of_measurement: "min"
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 1)
+              reterminal::sync_interval_min = (int) x;
+            reterminal::bump_interact();
+
+  # Night window for the analog page's inverted dials
+  - platform: template
+    name: "Night From"
+    id: night_from_n
+    optimistic: true
+    restore_value: true
+    initial_value: 18
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 0 && x <= 23)
+              reterminal::night_from = (int) x;
+            reterminal::bump_interact();
+  - platform: template
+    name: "Night To"
+    id: night_to_n
+    optimistic: true
+    restore_value: true
+    initial_value: 6
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 0 && x <= 23)
+              reterminal::night_to = (int) x;
+            reterminal::bump_interact();
+
+  # Page shown after a cold boot (reset, reflash, power loss); 1-based.
+  # Values outside 1..PAGE_COUNT fall back to the first page.
+  - platform: template
+    name: "Start Page"
+    id: start_page
+    optimistic: true
+    restore_value: true
+    initial_value: 1
+    min_value: 1
+    max_value: 99
+    step: 1
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: 'reterminal::bump_interact();'
+
+button:
+  # One short beep, immediately (works only while the device is awake)
+  - platform: template
+    name: "Beep"
+    on_press:
+      - script.execute: beep_short
+      - lambda: 'reterminal::bump_interact();'
+
+  # Emulated presses from HA / REST (device must be awake to receive them)
+  # "Page ..." prefix keeps them adjacent in HA's alphabetical Controls list
+  - platform: template
+    name: "Page Next"
+    on_press:
+      - script.execute: page_next
+  - platform: template
+    name: "Page Previous"
+    on_press:
+      - script.execute: page_prev
+  - platform: template
+    name: "Fetch History"
+    on_press:
+      - script.execute: do_fetch
+
+switch:
+  # Pause deep sleep while tinkering. RAM only (ALWAYS_OFF): any reset or
+  # power cycle re-enables deep sleep. The HA-queued
+  # input_boolean.reterminal_keep_awake serves the same purpose while asleep.
+  - platform: template
+    name: "Pause Deep Sleep"
+    id: sleep_pause
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'
+
+  # Per-page visibility: navigation, auto-cycle, and start page skip pages
+  # whose switch is off. With everything off, page 1 shows as fallback.
+  - platform: template
+    name: "Show 1 World Clock"
+    id: show_page1
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[0] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[0] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 2 Climate"
+    id: show_page2
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[1] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[1] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 3 Temperature 24h"
+    id: show_page3
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[2] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[2] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 4 Humidity 24h"
+    id: show_page4
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[3] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[3] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 5 Weekly History"
+    id: show_page5
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[4] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[4] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 6 Analog Clocks"
+    id: show_page6
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[5] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[5] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 7 Noqte"
+    id: show_page7
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[6] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[6] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+
+  # Per-zone visibility on the world clock pages
+  - platform: template
+    name: "Zone 1 Enabled"
+    id: zone1_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 2 Enabled"
+    id: zone2_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 3 Enabled"
+    id: zone3_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 4 Enabled"
+    id: zone4_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 5 Enabled"
+    id: zone5_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+
+  # Radio kill switch, persists across reboots. While off the device is
+  # unreachable from HA — recover with the green button, which enables wifi
+  # for one wake without touching this switch.
+  - platform: template
+    name: "Radio"
+    id: radio_sw
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - wifi.enable:
+      - lambda: |-
+          reterminal::radio_on = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::radio_on = false;
+          reterminal::bump_interact();
+      - wifi.disable:
+
+  # Solar Hijri date in the status bar
+  - platform: template
+    name: "Status Bar Solar Hijri"
+    id: bar_jalali
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'
+
+  # Device temp/hum in the status bar ("T 25° H 48")
+  - platform: template
+    name: "Status Bar Climate"
+    id: bar_climate
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'
+
+  # Advance one page per timer wake; toggleable from HA, survives deep sleep
+  - platform: template
+    name: "Page Auto-Cycle"
+    id: auto_cycle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'

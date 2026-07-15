@@ -21,13 +21,18 @@ exists.
 
 | File | Purpose |
 |------|---------|
-| `esphome-reterminal-e1001.yaml` | ESPHome config, entities, wake orchestration |
-| `reterminal_epaper.h` | Rendering, runtime zone store, history fetch, sleep bookkeeping |
-| `jalali.h` | Header-only Gregorian → Solar Hijri conversion (jdf algorithm) |
+| `esphome-reterminal-e1001.yaml` | Main config: substitutions, packages, boot orchestration |
+| `packages/*.yaml` | Config split by concern: hardware, network, controls, app (scripts/display) |
+| `reterminal.h` | Umbrella include used by the lambdas |
+| `reterminal/pure.h` | Host-testable logic: parsers, calendars, timezone math |
+| `reterminal/device.h` | RTC state, sleep bookkeeping, REST access, snapshots, SD stack |
+| `reterminal/draw.h` | Page renderers |
+| `reterminal/jalali.h` | Gregorian → Solar Hijri conversion (jdf algorithm) |
+| `reterminal/tzdata.h` | Embedded IANA-name → current-POSIX-rule table (generated) |
+| `tests/host_test.cpp` | Host-side unit tests for `pure.h` (see header for the one-liner) |
 | `noqte.ttf` | Noqte font (from `../noqte`) for the Persian test page |
 | `partitions.csv` | 32 MB flash layout: 2×3 MB OTA apps + 24 MB `hist` data partition |
-| `tzdata.h` | Embedded IANA-name → current-POSIX-rule table (generated) |
-| `tzdata.csv` | Same data as a file — the future SD-card override source |
+| `tzdata.csv` | Same tz data as a file — the SD-card override source |
 | `gen_tzdata.py` | Regenerates both from upstream tzdata (`uv run --with tzdata python3 gen_tzdata.py`) |
 | `validate_config.py` | Host-side `config.json` validator — mirrors the firmware's acceptance rules, cross-checks IANA names against `tzdata.csv` |
 | `set_datetime.py` | Stamps a fresh one-shot `set_time` into `config.json` for air-gapped clock setting |
@@ -35,8 +40,9 @@ exists.
 | `sd-config-design.md` | Air-gapped SD-card configuration: design + implementation notes |
 | `config.json.example` | Template for the SD `config.json` |
 
-The YAML, the three headers, and `noqte.ttf` must sit together in the
-ESPHome builder folder.
+The main YAML, `packages/`, `reterminal.h`, the `reterminal/` directory,
+`partitions.csv`, and the font files must sit together in the ESPHome
+builder folder (copy the directories as-is).
 
 ## Pages
 
