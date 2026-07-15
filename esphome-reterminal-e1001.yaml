@@ -33,12 +33,16 @@ esphome:
   includes:
     - reterminal_epaper.h
     - jalali.h
+    - tzdata.h
   # Arduino libs for the HA history fetch; ESPHome builds with the library
   # dependency finder off, so they must be listed explicitly
   libraries:
     - WiFi
     - WiFiClientSecure
     - HTTPClient
+    - SPI
+    - FS
+    - SD
   on_boot:
     # -100 = everything is set up, so boot_flow may draw immediately
     priority: -100
@@ -51,13 +55,50 @@ esphome:
       - component.update: battery_voltage
       - component.update: battery_level
       # Read RTC time before anything needs the clock / 启动时读取 RTC 时间
+      - lambda: 'reterminal::pre_rtc_time = ::time(nullptr);'
       - pcf8563.read_time:
-      # Mirror switches, flag a dead RTC, apply the start page on cold boot
+      # Mirror all HA config entities, flag a dead RTC, restore the history
+      # snapshot and apply the start page on cold boot
       - lambda: |-
-          reterminal::device_only = id(device_only_sw).state;
           reterminal::radio_on = id(radio_sw).state;
-          reterminal::rtc_bad = ::time(nullptr) < reterminal::MIN_VALID_EPOCH;
-          if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED) {
+          // A frozen chip (STOP set, dead cell) can report stale time as
+          // valid and clobber the system clock that survives deep sleep on
+          // its own — detect and undo that
+          bool clobbered = reterminal::pre_rtc_time > reterminal::MIN_VALID_EPOCH &&
+                           ::time(nullptr) < reterminal::pre_rtc_time - 300;
+          if (clobbered) {
+            struct timeval tv = {.tv_sec = reterminal::pre_rtc_time, .tv_usec = 0};
+            settimeofday(&tv, nullptr);
+            ESP_LOGW("reterminal", "RTC chip returned stale time; kept system clock");
+          }
+          reterminal::rtc_bad = clobbered ||
+                                ::time(nullptr) < reterminal::MIN_VALID_EPOCH;
+          if (id(sync_interval).state >= 1)
+            reterminal::sync_interval_min = (int) id(sync_interval).state;
+          if (id(night_from_n).state >= 0 && id(night_from_n).state <= 23)
+            reterminal::night_from = (int) id(night_from_n).state;
+          if (id(night_to_n).state >= 0 && id(night_to_n).state <= 23)
+            reterminal::night_to = (int) id(night_to_n).state;
+          bool *pe = reterminal::page_enabled_;
+          pe[0] = id(show_page1).state;
+          pe[1] = id(show_page2).state;
+          pe[2] = id(show_page3).state;
+          pe[3] = id(show_page4).state;
+          pe[4] = id(show_page5).state;
+          pe[5] = id(show_page6).state;
+          pe[6] = id(show_page7).state;
+          reterminal::rebuild_zones(
+              id(zone1_en).state ? id(zone_1).state.c_str() : "",
+              id(zone2_en).state ? id(zone_2).state.c_str() : "",
+              id(zone3_en).state ? id(zone_3).state.c_str() : "",
+              id(zone4_en).state ? id(zone_4).state.c_str() : "",
+              id(zone5_en).state ? id(zone_5).state.c_str() : "",
+              id(home_tz).state.c_str());
+          reterminal::rebuild_columns(id(col_1).state.c_str(), id(col_2).state.c_str(),
+                                      id(col_3).state.c_str());
+          bool cold = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED;
+          reterminal::hist_init(cold);
+          if (cold) {
             int p = (int) id(start_page).state - 1;
             reterminal::page = (p >= 0 && p < reterminal::PAGE_COUNT) ? p : 0;
           }
@@ -68,13 +109,24 @@ esphome:
             lambda: 'return !reterminal::radio_on;'
           then:
             - wifi.disable:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_awake();'
       - script.execute: boot_flow
+      - script.execute: sd_check
 
+# flash_size + partitions change the partition table: the first install of
+# this build must go over USB (OTA cannot rewrite the table)
 esp32:
   board: esp32-s3-devkitc-1
+  flash_size: 32MB
+  partitions: partitions.csv
   framework:
     type: arduino
+    advanced:
+      # required for OTA on 32 MB flash
+      enable_idf_experimental_features: true
+    sdkconfig_options:
+      # directory VFS calls for the SD (FAT32) filesystem
+      CONFIG_VFS_SUPPORT_DIR: "y"
 
 # Enable serial logging / 启用串口日志
 # The reTerminal E series has a CH340K USB-to-UART bridge on UART0.
@@ -83,16 +135,24 @@ esp32:
 logger:
   hardware_uart: UART0
 
+# Provides ArduinoJson for the SD config parser
+json:
+
 # =============================================================================
 # Fonts / 字体
 # =============================================================================
 
 # Explicit glyph set: the default covers ASCII only, we need the degree sign
 font:
+  # tiny: graph axis/tick labels only
+  - file: "gfonts://Inter@700"
+    id: font_tiny
+    size: 16
+    glyphs: &glyphs '!"%()+,-./0123456789:;=?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz °'
   - file: "gfonts://Inter@700"
     id: font_small
     size: 20
-    glyphs: &glyphs '!"%()+,-./0123456789:;=?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz °'
+    glyphs: *glyphs
   - file: "gfonts://Inter@700"
     id: font_medium
     size: 32
@@ -162,29 +222,214 @@ output:
     pin: GPIO38
     id: mic_power_enable
 
-select:
-  # Home timezone for both world clock pages: gets the inversion and is the
-  # base for the displayed offsets. Options must match ZONES order.
+# World clock zones as editable data. Accepted forms per zone:
+#   "Asia/Tehran"                       IANA name (embedded tzdata table)
+#   "Memphis=America/Chicago"           IANA name with a custom label
+#   "City|std_min"                      fixed offset, minutes east of UTC
+#   "City|std_min|dst_min|m.w/h|m.w/h"  manual DST rules (week 5 = last Sunday)
+# Empty slot = unused; invalid specs are skipped (see logs).
+text:
+  - platform: template
+    name: "Zone 1"
+    id: zone_1
+    optimistic: true
+    restore_value: true
+    initial_value: "Asia/Tehran"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 2"
+    id: zone_2
+    optimistic: true
+    restore_value: true
+    initial_value: "Europe/Berlin"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 3"
+    id: zone_3
+    optimistic: true
+    restore_value: true
+    initial_value: "Memphis=America/Chicago"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 4"
+    id: zone_4
+    optimistic: true
+    restore_value: true
+    initial_value: "America/Mexico_City"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+  - platform: template
+    name: "Zone 5"
+    id: zone_5
+    optimistic: true
+    restore_value: true
+    initial_value: "America/Vancouver"
+    max_length: 48
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+
+  # Matched against the zone cities by name; the match gets the inversion
+  # and is the base for the displayed offsets
   - platform: template
     name: "Home Timezone"
     id: home_tz
     optimistic: true
     restore_value: true
-    initial_option: "Berlin"
-    options:
-      - "Tehran"
-      - "Berlin"
-      - "Memphis"
-      - "Mexico City"
-      - "Vancouver"
+    initial_value: "Berlin"
+    max_length: 20
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+
+  # Climate columns (numbers page + graph lines), sources as data:
+  #   "Label=dev"                          onboard SHT4x, sampled locally
+  #   "Label=<temp_entity>,<hum_entity>"   polled from HA over REST
+  # Empty = column disabled. All-dev configs never touch the network.
+  - platform: template
+    name: "Column 1"
+    id: col_1
+    optimistic: true
+    restore_value: true
+    initial_value: "Device=dev"
+    max_length: 160
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: cols_changed
+  - platform: template
+    name: "Column 2"
+    id: col_2
+    optimistic: true
+    restore_value: true
+    initial_value: "Indoor=sensor.indoor_temperature,sensor.indoor_humidity"
+    max_length: 160
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: cols_changed
+  - platform: template
+    name: "Column 3"
+    id: col_3
+    optimistic: true
+    restore_value: true
+    initial_value: "Outdoor=sensor.outdoor_temperature,sensor.outdoor_humidity"
+    max_length: 160
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: cols_changed
+
+  # HA REST endpoint; seeded from secrets on first flash, editable ever after
+  - platform: template
+    name: "HA URL"
+    id: ha_url
+    optimistic: true
+    restore_value: true
+    initial_value: "http://${ha_http_ip}:8123"
+    max_length: 64
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - lambda: 'reterminal::bump_interact();'
+  - platform: template
+    name: "HA Token"
+    id: ha_token
+    optimistic: true
+    restore_value: true
+    initial_value: "${ha_api_token}"
+    max_length: 255
+    mode: password
+    entity_category: config
+    on_value:
+      then:
+        - lambda: 'reterminal::bump_interact();'
+
+number:
+  # Minutes between HA syncs (API connect: time + queued helpers). Green
+  # button and cold boot always sync.
+  - platform: template
+    name: "HA Sync Interval"
+    id: sync_interval
+    optimistic: true
+    restore_value: true
+    initial_value: 15
+    min_value: 1
+    max_value: 1440
+    step: 1
+    unit_of_measurement: "min"
+    mode: box
     entity_category: config
     on_value:
       then:
         - lambda: |-
-            reterminal::home_zone = (int) i;
-            reterminal::bump_awake(id(wake_time).state);
+            if (x >= 1)
+              reterminal::sync_interval_min = (int) x;
+            reterminal::bump_interact();
 
-number:
+  # Night window for the analog page's inverted dials
+  - platform: template
+    name: "Night From"
+    id: night_from_n
+    optimistic: true
+    restore_value: true
+    initial_value: 18
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 0 && x <= 23)
+              reterminal::night_from = (int) x;
+            reterminal::bump_interact();
+  - platform: template
+    name: "Night To"
+    id: night_to_n
+    optimistic: true
+    restore_value: true
+    initial_value: 6
+    min_value: 0
+    max_value: 23
+    step: 1
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 0 && x <= 23)
+              reterminal::night_to = (int) x;
+            reterminal::bump_interact();
+
   # Page shown after a cold boot (reset, reflash, power loss); 1-based.
   # Values outside 1..PAGE_COUNT fall back to the first page.
   - platform: template
@@ -200,34 +445,19 @@ number:
     entity_category: config
     on_value:
       then:
-        - lambda: 'reterminal::bump_awake(id(wake_time).state);'
-
-  # Idle seconds before sleeping after the last activity; settable from HA
-  - platform: template
-    name: "Wake Time"
-    id: wake_time
-    optimistic: true
-    restore_value: true
-    initial_value: 60
-    min_value: 10
-    max_value: 300
-    step: 5
-    unit_of_measurement: "s"
-    mode: box
-    entity_category: config
-    on_value:
-      then:
-        - lambda: 'reterminal::bump_awake(x);'
+        - lambda: 'reterminal::bump_interact();'
 
 interval:
-  # Enter sleep once wake_time has elapsed since the last activity and no
-  # command script is mid-flight
+  # Enter sleep a short grace after the last activity, once no command
+  # script is mid-flight. Keeping the device up is the HA-queued
+  # input_boolean.reterminal_keep_awake, delivered on wake like "Press".
   - interval: 1s
     then:
       - if:
           condition:
             and:
               - switch.is_off: sleep_pause
+              - binary_sensor.is_off: keep_awake
               - lambda: 'return reterminal::sleep_due();'
               - not:
                   script.is_running: boot_flow
@@ -239,10 +469,147 @@ interval:
                   script.is_running: page_prev
               - not:
                   script.is_running: net_refresh
+              - not:
+                  script.is_running: apply_changes
+              - not:
+                  script.is_running: sd_check
           then:
+            # Persist history to the flash partition (hourly) before sleeping
+            - lambda: 'reterminal::maybe_snapshot();'
             - deep_sleep.enter: deep_sleep_1
 
 script:
+  - id: zones_changed
+    mode: restart
+    then:
+      - lambda: |-
+          reterminal::rebuild_zones(
+              id(zone1_en).state ? id(zone_1).state.c_str() : "",
+              id(zone2_en).state ? id(zone_2).state.c_str() : "",
+              id(zone3_en).state ? id(zone_3).state.c_str() : "",
+              id(zone4_en).state ? id(zone_4).state.c_str() : "",
+              id(zone5_en).state ? id(zone_5).state.c_str() : "",
+              id(home_tz).state.c_str());
+          reterminal::bump_interact();
+
+  - id: cols_changed
+    mode: restart
+    then:
+      - lambda: |-
+          reterminal::rebuild_columns(id(col_1).state.c_str(), id(col_2).state.c_str(),
+                                      id(col_3).state.c_str());
+          reterminal::bump_interact();
+
+  # Shared apply path for config change-sets (HA config queue and SD card):
+  # semicolon-separated key=value pairs from reterminal::pending_changes.
+  - id: apply_changes
+    mode: queued
+    then:
+      - lambda: |-
+          std::string s = reterminal::pending_changes;
+          reterminal::pending_changes.clear();
+          size_t pos = 0;
+          while (pos <= s.size()) {
+            size_t end = s.find(';', pos);
+            if (end == std::string::npos) end = s.size();
+            std::string kv = s.substr(pos, end - pos);
+            pos = end + 1;
+            size_t eq = kv.find('=');
+            if (eq == std::string::npos) {
+              if (!kv.empty())
+                ESP_LOGW("reterminal", "apply: bad entry '%s'", kv.c_str());
+              if (end == s.size()) break;
+              continue;
+            }
+            std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
+            esphome::text::Text *zones_t[5] = {id(zone_1), id(zone_2), id(zone_3),
+                                               id(zone_4), id(zone_5)};
+            esphome::switch_::Switch *shows[7] = {id(show_page1), id(show_page2),
+                                                  id(show_page3), id(show_page4),
+                                                  id(show_page5), id(show_page6),
+                                                  id(show_page7)};
+            esphome::text::Text *cols_t[3] = {id(col_1), id(col_2), id(col_3)};
+            if (k.size() == 5 && k.rfind("zone", 0) == 0 && k[4] >= '1' && k[4] <= '5') {
+              zones_t[k[4] - '1']->make_call().set_value(v).perform();
+            } else if (k.size() == 4 && k.rfind("col", 0) == 0 && k[3] >= '1' && k[3] <= '3') {
+              cols_t[k[3] - '1']->make_call().set_value(v).perform();
+            } else if (k == "sync") {
+              id(sync_interval).make_call().set_value(atoi(v.c_str())).perform();
+            } else if (k == "home") {
+              id(home_tz).make_call().set_value(v).perform();
+            } else if (k == "night") {
+              int f, t;
+              if (sscanf(v.c_str(), "%d-%d", &f, &t) == 2) {
+                id(night_from_n).make_call().set_value(f).perform();
+                id(night_to_n).make_call().set_value(t).perform();
+              } else {
+                ESP_LOGW("reterminal", "apply: bad night '%s'", v.c_str());
+              }
+            } else if (k == "start") {
+              id(start_page).make_call().set_value(atoi(v.c_str())).perform();
+            } else if (k.size() == 5 && k.rfind("show", 0) == 0 && k[4] >= '1' && k[4] <= '7') {
+              if (v == "on") shows[k[4] - '1']->turn_on();
+              else shows[k[4] - '1']->turn_off();
+            } else if (k == "cycle") {
+              if (v == "on") id(auto_cycle).turn_on();
+              else id(auto_cycle).turn_off();
+            } else {
+              ESP_LOGW("reterminal", "apply: unknown key '%s'", k.c_str());
+            }
+            if (end == s.size()) break;
+          }
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+      - component.update: epaper_display
+      - lambda: 'reterminal::bump_interact();'
+
+  # Mount the SD card, load the tzdata override, and apply /config.json when
+  # its content changed. Two short beeps = applied, one long = rejected.
+  - id: sd_check
+    mode: single
+    then:
+      - if:
+          condition:
+            binary_sensor.is_on: sd_card_detect
+          then:
+            - lambda: |-
+                std::string ch = reterminal::sd_process();
+                if (!ch.empty())
+                  reterminal::pending_changes = ch;
+            - if:
+                condition:
+                  lambda: 'return reterminal::sd_time_was_set;'
+                then:
+                  - pcf8563.write_time:
+                  - lambda: 'reterminal::sd_time_was_set = false;'
+            - if:
+                condition:
+                  lambda: 'return !reterminal::pending_changes.empty();'
+                then:
+                  - script.execute: apply_changes
+                  - script.execute: beep_ok
+            - if:
+                condition:
+                  lambda: 'return reterminal::sd_error;'
+                then:
+                  - script.execute: beep_err
+
+  - id: beep_ok
+    mode: single
+    then:
+      - script.execute: beep_short
+      - delay: 250ms
+      - script.execute: beep_short
+
+  - id: beep_err
+    mode: single
+    then:
+      - light.turn_on:
+          id: buzzer
+          brightness: 50%
+      - delay: 600ms
+      - light.turn_off: buzzer
+
   - id: beep_short
     mode: restart
     then:
@@ -258,7 +625,7 @@ script:
       - script.execute: beep_short
       - lambda: 'reterminal::prev_page();'
       - component.update: epaper_display
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
 
   - id: page_next
     mode: single
@@ -266,71 +633,83 @@ script:
       - script.execute: beep_short
       - lambda: 'reterminal::next_page();'
       - component.update: epaper_display
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
 
+  # Green button: sync + fetch now. Also the recovery path when the radio
+  # switch is off — wifi is enabled for this wake, the switch untouched.
   - id: do_fetch
     mode: single
     then:
       - script.execute: beep_short
-      # Green is the recovery path when the radio switch is off: enable wifi
-      # for this wake (the switch state is untouched)
       - if:
           condition:
             lambda: 'return !reterminal::radio_on;'
           then:
             - wifi.enable:
             - lambda: 'reterminal::radio_on = true;'
-      - wait_until:
-          condition:
-            wifi.connected:
-          timeout: 10s
-      - if:
-          condition:
-            and:
-              - wifi.connected:
-              - lambda: 'return !reterminal::device_only;'
-          then:
-            - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
-      - component.update: epaper_display
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::force_sync = true;'
+      - script.execute: net_refresh
 
-  # Network part of a wake: short waits (LAN), time request, fetch if the
-  # shown page needs it; ends with the wake's single redraw.
+  # Network part of a wake: HA sync (API: time + queued helpers) only when
+  # due or forced; REST data work only when the shown page needs it. Ends
+  # with the wake's single redraw.
   - id: net_refresh
     mode: single
     then:
       - if:
           condition:
-            lambda: 'return reterminal::radio_on;'
+            lambda: |-
+              return reterminal::radio_on &&
+                     (reterminal::force_sync || reterminal::network_needed());
           then:
             - wait_until:
                 condition:
                   wifi.connected:
                 timeout: 10s
-            - wait_until:
-                condition:
-                  api.connected:
-                timeout: 2s
-            # HA only sends time on request and the platform's 15 min
-            # polling never fires within a wake window
-            - lambda: 'id(ha_time).update();'
-            - wait_until:
-                condition:
-                  time.has_time:
-                timeout: 10s
-            # Let HA push sensor states
-            - delay: 1s
             - if:
                 condition:
-                  lambda: |-
-                    return !reterminal::device_only &&
-                           (reterminal::wake_action() == reterminal::WAKE_FETCH ||
-                            (reterminal::fetch_due() &&
-                             reterminal::page_needs_history(reterminal::page)));
+                  lambda: 'return reterminal::force_sync || reterminal::sync_due();'
                 then:
-                  - lambda: 'reterminal::fetch_history("http://${ha_http_ip}:8123", "${ha_api_token}");'
+                  - wait_until:
+                      condition:
+                        api.connected:
+                      timeout: 2s
+                  # HA only sends time on request and the platform's 15 min
+                  # polling never fires within a wake window
+                  - lambda: 'id(ha_time).update();'
+                  - wait_until:
+                      condition:
+                        time.has_time:
+                      timeout: 10s
+                  # Let HA push the queued helpers (Press, keep-awake, config)
+                  - delay: 1s
+                  - lambda: 'reterminal::sync_attempt_at = ::time(nullptr);'
+            - if:
+                condition:
+                  and:
+                    - wifi.connected:
+                    - lambda: 'return reterminal::page_needs_live(reterminal::page);'
+                then:
+                  - lambda: 'reterminal::poll_live(id(ha_url).state.c_str(), id(ha_token).state.c_str());'
+            - if:
+                condition:
+                  and:
+                    - wifi.connected:
+                    - lambda: |-
+                        return (reterminal::force_sync && reterminal::any_ha_col()) ||
+                               (reterminal::fetch_due() &&
+                                reterminal::page_needs_history(reterminal::page));
+                then:
+                  - lambda: 'reterminal::fetch_history(id(ha_url).state.c_str(), id(ha_token).state.c_str());'
       - component.update: epaper_display
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      # A green press earns a 30 s interaction window; other wakes get the
+      # short grace
+      - lambda: |-
+          if (reterminal::force_sync)
+            reterminal::bump_awake_for(reterminal::INTERACT_AWAKE_MS);
+          else
+            reterminal::bump_awake();
+          reterminal::force_sync = false;
 
   # Runs once per wake. Button wakes flip the page instantly with the values
   # cached in RTC memory; timer/green wakes wait for HA, fetch history when
@@ -350,14 +729,18 @@ script:
                   reterminal::prev_page();
                 else
                   reterminal::next_page();
-            - if:
+            # The SHT4x's first measurement lands moments after boot; without
+            # this wait the dev-column sample is NaN every wake
+            - wait_until:
                 condition:
-                  lambda: 'return reterminal::device_only;'
-                then:
-                  - lambda: 'reterminal::sample_device(id(temp_sensor).state, id(hum_sensor).state);'
+                  lambda: 'return !std::isnan(id(temp_sensor).state);'
+                timeout: 3s
+            - lambda: 'reterminal::tick_data(id(temp_sensor).state, id(hum_sensor).state);'
             - component.update: epaper_display
-            - lambda: 'reterminal::bump_awake(id(wake_time).state);'
-            # A flip onto a data page with nothing to show yet earns a fetch
+            # A wake press is unambiguous interaction; it precedes the uptime
+            # gate, so use the window directly
+            - lambda: 'reterminal::bump_awake_for(reterminal::INTERACT_AWAKE_MS);'
+            # A flip onto a data page with nothing to show yet earns a refresh
             - if:
                 condition:
                   lambda: 'return reterminal::page_data_empty(reterminal::page);'
@@ -376,6 +759,7 @@ script:
                       then:
                         - wifi.enable:
                         - lambda: 'reterminal::radio_on = true;'
+                  - lambda: 'reterminal::force_sync = true;'
             # Advance first so the network decision matches the page shown
             - if:
                 condition:
@@ -384,23 +768,21 @@ script:
                     - lambda: 'return reterminal::wake_action() == reterminal::WAKE_TIMER;'
                 then:
                   - lambda: 'reterminal::next_page();'
+            # Roll the history windows and sample dev columns (the SHT4x's
+            # first measurement lands moments after boot, hence the wait)
+            - wait_until:
+                condition:
+                  lambda: 'return !std::isnan(id(temp_sensor).state);'
+                timeout: 3s
+            - lambda: 'reterminal::tick_data(id(temp_sensor).state, id(hum_sensor).state);'
             - if:
                 condition:
-                  lambda: 'return reterminal::device_only;'
-                then:
-                  - lambda: 'reterminal::sample_device(id(temp_sensor).state, id(hum_sensor).state);'
-            # Skip all network waits when the shown page needs no HA data and
-            # the clock was synced within the last day
-            - if:
-                condition:
-                  lambda: |-
-                    return reterminal::wake_action() == reterminal::WAKE_FETCH ||
-                           reterminal::network_needed();
+                  lambda: 'return reterminal::force_sync || reterminal::network_needed();'
                 then:
                   - script.execute: net_refresh
                 else:
                   - component.update: epaper_display
-                  - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+                  - lambda: 'reterminal::bump_awake();'
 
 sensor:
   # --- SHT4x temperature & humidity (I2C) ---
@@ -453,45 +835,6 @@ sensor:
           min_value: 0
           max_value: 100
 
-  # --- Indoor / outdoor climate from HA ---
-  # Last values are cached in RTC memory so button wakes can redraw
-  # instantly, before the API reconnects.
-  - platform: homeassistant
-    id: in_temp
-    entity_id: sensor.indoor_temperature
-    on_value:
-      then:
-        - lambda: |-
-            reterminal::last_val[reterminal::S_IN_T] = x;
-            reterminal::last_val_time = ::time(nullptr);
-
-  - platform: homeassistant
-    id: out_temp
-    entity_id: sensor.outdoor_temperature
-    on_value:
-      then:
-        - lambda: |-
-            reterminal::last_val[reterminal::S_OUT_T] = x;
-            reterminal::last_val_time = ::time(nullptr);
-
-  - platform: homeassistant
-    id: in_hum
-    entity_id: sensor.indoor_humidity
-    on_value:
-      then:
-        - lambda: |-
-            reterminal::last_val[reterminal::S_IN_H] = x;
-            reterminal::last_val_time = ::time(nullptr);
-
-  - platform: homeassistant
-    id: out_hum
-    entity_id: sensor.outdoor_humidity
-    on_value:
-      then:
-        - lambda: |-
-            reterminal::last_val[reterminal::S_OUT_H] = x;
-            reterminal::last_val_time = ::time(nullptr);
-
 text_sensor:
   # "Press" queue: create an HA Button helper named "Press" with entity id
   # input_button.reterminal_press. Its state is the timestamp of its last
@@ -517,10 +860,51 @@ text_sensor:
               reterminal::beep_ack = ts;
               ESP_LOGI("reterminal", "queued press received, beeping");
               id(beep_short).execute();
-              reterminal::bump_awake(id(wake_time).state);
+              reterminal::bump_interact();
             }
 
+  # HA-queued config channel: create a Text helper with entity id
+  # input_text.reterminal_config. Write semicolon-separated changes, e.g.
+  #   zone3=Asia/Dubai;show7=off;night=19-7;col1=Device=dev
+  # Keys: zone1..zone5 (spec or empty), col1..col3 (spec or empty), home,
+  # night=F-T, start=N, sync=MIN, cycle/showN=on|off. Applied on wake (or
+  # instantly while awake), then the helper is cleared as the
+  # acknowledgement — requires "allow the device to perform Home Assistant
+  # actions" in the ESPHome integration settings.
+  - platform: homeassistant
+    id: config_queue
+    entity_id: input_text.reterminal_config
+    on_value:
+      then:
+        - if:
+            condition:
+              lambda: 'return !x.empty() && x != "unknown";'
+            then:
+              - lambda: 'reterminal::pending_changes = x;'
+              - script.execute: apply_changes
+              # Clear the helper: consumed exactly once, acts as the ack
+              - homeassistant.action:
+                  action: input_text.set_value
+                  data:
+                    entity_id: input_text.reterminal_config
+                    value: ""
+              - script.execute: beep_short
+
 binary_sensor:
+  # HA-queued keep-awake: create a Toggle helper with entity id
+  # input_boolean.reterminal_keep_awake. Its state is delivered as soon as
+  # the device wakes; while on, the device does not go back to sleep.
+  # Turn it off (device is awake and receives it immediately) to resume.
+  - platform: homeassistant
+    id: keep_awake
+    entity_id: input_boolean.reterminal_keep_awake
+    on_press:
+      then:
+        - script.execute: beep_short
+    on_release:
+      then:
+        - lambda: 'reterminal::bump_interact();'
+
   # The millis() gate skips the phantom on_press fired while booting from a
   # button wake — boot_flow already handles that press.
 
@@ -584,6 +968,16 @@ binary_sensor:
       inverted: true
     id: sd_card_detect
     name: "SD Card Detected"
+    on_press:
+      then:
+        # Card inserted while awake: settle, then process it
+        - if:
+            condition:
+              lambda: 'return millis() > 3000;'
+            then:
+              - delay: 500ms
+              - lambda: 'reterminal::sd_mounted = false;'
+              - script.execute: sd_check
 
 button:
   # One short beep, immediately (works only while the device is awake)
@@ -591,7 +985,7 @@ button:
     name: "Beep"
     on_press:
       - script.execute: beep_short
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
 
   # Emulated presses from HA / REST (device must be awake to receive them)
   # "Page ..." prefix keeps them adjacent in HA's alphabetical Controls list
@@ -609,27 +1003,186 @@ button:
       - script.execute: do_fetch
 
 switch:
-  # Climate pages use only the onboard SHT4x, sampled once per wake; the
-  # in/out 24 h pages are skipped and no HA data is fetched. Toggling clears
-  # the graph history since the data sources are not comparable.
+  # Pause deep sleep while tinkering. RAM only (ALWAYS_OFF): any reset or
+  # power cycle re-enables deep sleep. The HA-queued
+  # input_boolean.reterminal_keep_awake serves the same purpose while asleep.
   - platform: template
-    name: "Device Only"
-    id: device_only_sw
+    name: "Pause Deep Sleep"
+    id: sleep_pause
     optimistic: true
-    restore_mode: RESTORE_DEFAULT_OFF
+    restore_mode: ALWAYS_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'
+
+  # Per-page visibility: navigation, auto-cycle, and start page skip pages
+  # whose switch is off. With everything off, page 1 shows as fallback.
+  - platform: template
+    name: "Show 1 World Clock"
+    id: show_page1
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
     entity_category: config
     on_turn_on:
       - lambda: |-
-          reterminal::device_only = true;
-          reterminal::clear_history();
-          if (reterminal::page_hidden(reterminal::page))
-            reterminal::next_page();
-          reterminal::bump_awake(id(wake_time).state);
+          reterminal::page_enabled_[0] = true;
+          reterminal::bump_interact();
     on_turn_off:
       - lambda: |-
-          reterminal::device_only = false;
-          reterminal::clear_history();
-          reterminal::bump_awake(id(wake_time).state);
+          reterminal::page_enabled_[0] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 2 Climate"
+    id: show_page2
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[1] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[1] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 3 Temperature 24h"
+    id: show_page3
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[2] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[2] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 4 Humidity 24h"
+    id: show_page4
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[3] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[3] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 5 Weekly History"
+    id: show_page5
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[4] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[4] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 6 Analog Clocks"
+    id: show_page6
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[5] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[5] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
+    name: "Show 7 Noqte"
+    id: show_page7
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[6] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[6] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+
+  # Per-zone visibility on the world clock pages
+  - platform: template
+    name: "Zone 1 Enabled"
+    id: zone1_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 2 Enabled"
+    id: zone2_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 3 Enabled"
+    id: zone3_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 4 Enabled"
+    id: zone4_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
+  - platform: template
+    name: "Zone 5 Enabled"
+    id: zone5_en
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - script.execute: zones_changed
+    on_turn_off:
+      - script.execute: zones_changed
 
   # Radio kill switch, persists across reboots. While off the device is
   # unreachable from HA — recover with the green button, which enables wifi
@@ -644,12 +1197,24 @@ switch:
       - wifi.enable:
       - lambda: |-
           reterminal::radio_on = true;
-          reterminal::bump_awake(id(wake_time).state);
+          reterminal::bump_interact();
     on_turn_off:
       - lambda: |-
           reterminal::radio_on = false;
-          reterminal::bump_awake(id(wake_time).state);
+          reterminal::bump_interact();
       - wifi.disable:
+
+  # Solar Hijri date in the status bar
+  - platform: template
+    name: "Status Bar Solar Hijri"
+    id: bar_jalali
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: 'reterminal::bump_interact();'
+    on_turn_off:
+      - lambda: 'reterminal::bump_interact();'
 
   # Device temp/hum in the status bar ("T 25° H 48")
   - platform: template
@@ -659,22 +1224,9 @@ switch:
     restore_mode: RESTORE_DEFAULT_ON
     entity_category: config
     on_turn_on:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
     on_turn_off:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
-
-  # Pause deep sleep while tinkering. RAM only (ALWAYS_OFF): any reset or
-  # power cycle re-enables deep sleep.
-  - platform: template
-    name: "Pause Deep Sleep"
-    id: sleep_pause
-    optimistic: true
-    restore_mode: ALWAYS_OFF
-    entity_category: config
-    on_turn_on:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
-    on_turn_off:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
 
   # Advance one page per timer wake; toggleable from HA, survives deep sleep
   - platform: template
@@ -683,9 +1235,9 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     on_turn_on:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
     on_turn_off:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
 
 light:
   - platform: binary
@@ -693,9 +1245,9 @@ light:
     output: bsp_led
     id: onboard_led
     on_turn_on:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
     on_turn_off:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
 
   # Buzzer wrapped as a "light": brightness = volume
   # 蜂鸣器包装成"灯"实体：亮度 = 音量
@@ -705,9 +1257,9 @@ light:
     id: buzzer
     default_transition_length: 0s
     on_turn_on:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
     on_turn_off:
-      - lambda: 'reterminal::bump_awake(id(wake_time).state);'
+      - lambda: 'reterminal::bump_interact();'
 
 time:
   # PCF8563 is at I2C address 0x51 with a CR1220 coin cell backup.
@@ -723,7 +1275,9 @@ time:
     on_time_sync:
       then:
         - pcf8563.write_time:
-        - lambda: 'reterminal::time_sync_at = ::time(nullptr);'
+        # the chip was just written; if it is truly frozen, the next boot's
+        # clobber detection re-raises the warning
+        - lambda: 'reterminal::rtc_bad = false;'
 
 # Home Assistant native API / Home Assistant 原生 API
 api:
@@ -742,7 +1296,7 @@ ota:
       then:
         - lambda: |-
             reterminal::ota_in_progress = false;
-            reterminal::bump_awake(id(wake_time).state);
+            reterminal::bump_awake();
 
 # Wi-Fi settings / Wi-Fi 设置
 wifi:
@@ -791,20 +1345,18 @@ display:
           break;
         case 1:
           reterminal::draw_numbers(it, id(font_huge), id(font_large), id(font_medium),
-                                   id(font_small), id(temp_sensor).state, id(hum_sensor).state);
+                                   id(font_small));
           break;
         case 2:
-          reterminal::draw_graph_page(it, reterminal::S_IN_T, reterminal::S_OUT_T,
-                                      "Temperature - 24h", "°C", id(font_medium), id(font_small),
-                                      0, 446);
+          reterminal::draw_graph_page(it, reterminal::M_TEMP, "Temperature - 24h",
+                                      id(font_medium), id(font_small), id(font_tiny));
           break;
         case 3:
-          reterminal::draw_graph_page(it, reterminal::S_IN_H, reterminal::S_OUT_H,
-                                      "Humidity - 24h", "%", id(font_medium), id(font_small),
-                                      0, 446);
+          reterminal::draw_graph_page(it, reterminal::M_HUM, "Humidity - 24h",
+                                      id(font_medium), id(font_small), id(font_tiny));
           break;
         case 4:
-          reterminal::draw_week_page(it, id(font_medium), id(font_small));
+          reterminal::draw_week_page(it, id(font_medium), id(font_small), id(font_tiny));
           break;
         case 5:
           reterminal::draw_analog_clocks(it, id(font_medium), id(font_small));
@@ -817,15 +1369,16 @@ display:
       if (reterminal::page != 0 && reterminal::page != 6)
         reterminal::draw_status_bar(it, id(font_small), id(battery_level).state,
                                     id(temp_sensor).state, id(hum_sensor).state,
-                                    id(bar_climate).state, id(sd_card_detect).state);
+                                    id(bar_climate).state, id(sd_card_detect).state,
+                                    id(bar_jalali).state);
 
 # =============================================================================
 # [10] Deep sleep / 深度睡眠
 # Wakes every 5 min to refresh; any button wakes it immediately.
 # =============================================================================
 
-# No run_duration: the arm_sleep script enters sleep wake_time seconds after
-# the last activity, so work (fetch, redraw, presses) always finishes first
+# No run_duration: the watcher interval enters sleep a short grace after the
+# last activity, so work (fetch, redraw, presses) always finishes first
 deep_sleep:
   id: deep_sleep_1
   sleep_duration: 5min

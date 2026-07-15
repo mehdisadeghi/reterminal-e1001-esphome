@@ -1,0 +1,41 @@
+# reTerminal E1001 — HA-side queued controls.
+#
+# These are Home Assistant helpers, not device entities: HA holds their
+# state and pushes it to the device on its next sync, so they work while
+# the device sleeps (native device entities cannot — commanding them while
+# asleep yields "Authenticated connection not ready yet").
+#
+# Install: copy this file to <ha config>/packages/reterminal.yaml — NOT
+# into /config/esphome/ (the ESPHome builder treats every YAML there as a
+# device config and fails on this one). Make sure configuration.yaml
+# contains:
+#
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# then restart HA (`ha core restart`). The entities appear under
+# Settings -> Devices & services -> Helpers and in Developer Tools ->
+# States; they cannot be linked to the reTerminal device in HA's registry,
+# so add them to a dashboard card next to the device's controls.
+
+input_button:
+  reterminal_press:
+    name: reTerminal Press
+    icon: mdi:bell-ring
+    # One beep on the next wake ("awake now"); presses collapse into one.
+
+input_boolean:
+  reterminal_keep_awake:
+    name: reTerminal Keep Awake
+    icon: mdi:sleep-off
+    # While on, the device stays awake from its next sync onward (it beeps
+    # once on receipt). Turn off to let it sleep again.
+
+input_text:
+  reterminal_config:
+    name: reTerminal Config Queue
+    icon: mdi:tune
+    max: 255
+    # Semicolon-separated changes, applied on the next sync and then
+    # cleared by the device as the acknowledgement, e.g.:
+    #   zone3=Asia/Dubai;show7=off;night=19-7;col1=Device=dev

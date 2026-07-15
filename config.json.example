@@ -2,11 +2,18 @@
   "version": 1,
   "set_time": "2026-07-15T12:00:00Z",
   "home_zone": "Berlin",
-  "wake_time_s": 60,
   "start_page": 1,
   "night_from": 18,
   "night_to": 6,
-  "device_only": false,
+  "sync_interval_min": 15,
+  "ha_url": "http://homeassistant.local:8123",
+  "ha_token": "REPLACE_WITH_LONG_LIVED_TOKEN",
+  "show_pages": [true, true, true, true, true, true, true],
+  "columns": [
+    { "label": "Device", "source": "dev" },
+    { "label": "Indoor", "source": "sensor.indoor_temperature,sensor.indoor_humidity" },
+    { "label": "Outdoor", "source": "sensor.outdoor_temperature,sensor.outdoor_humidity" }
+  ],
   "zones": [
     { "city": "Tehran", "std_offset_min": 210 },
     {
