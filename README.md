@@ -1,18 +1,22 @@
 # reTerminal E1001 — ePaper Dashboard
 
 ESPHome firmware for a Seeed reTerminal E1001 (ESP32-S3, 7.5" 800×480 B/W
-ePaper): a seven-page, fully HA-configurable dashboard — world clocks
-(digital and analog), indoor/outdoor/device climate, 24-hour and 7-day
-history graphs, and a Persian type test page. Battery powered, deep sleep
-5 min, awake `Wake Time` seconds after the last activity.
+ePaper): an eight-page, fully HA-configurable dashboard — world clocks
+(digital and analog), indoor/outdoor/device climate, 24-hour and
+multi-day history graphs, and Persian typography pages. Battery powered:
+deep sleep between refreshes (**Refresh Interval**, default 3 min), awake
+a 2 s grace after autonomous work and 30 s after user interaction.
 
 ## Stack
 
-**ESPHome** generates C++ from the YAML, built with PlatformIO for the
-ESP32-S3 (Arduino framework). All custom logic lives in two headers
-injected via `includes:` and called from YAML lambdas. The Arduino libs
-used by the fetch path (`WiFi`, `WiFiClientSecure`, `HTTPClient`) are
-declared explicitly (ESPHome builds with the library finder off). Fonts
+**ESPHome** generates C++ from the YAML, built for the ESP32-S3 with the
+Arduino framework — which since ESPHome 2026.7 compiles as an ESP-IDF
+component with selective library compilation. All custom logic lives in
+headers injected via `includes:` and called from YAML lambdas. The
+Arduino bundled libs used by the fetch and SD paths are switched on by
+listing their core-3.x names under `libraries:` (`HTTPClient`, `Network`,
+`NetworkClientSecure`, `SPI`, `FS`, `SD` — unknown names fall through to
+a registry lookup and fail the build). Fonts
 are rasterized at compile time — each TTF is subset to the exact `glyphs:`
 list; that's how a size-260 «نقطه» costs ~7 KB and no runtime font engine
 exists.
@@ -38,12 +42,36 @@ exists.
 | `validate_config.py` | Host-side `config.json` validator — mirrors the firmware's acceptance rules, cross-checks IANA names against `tzdata.csv` |
 | `set_datetime.py` | Stamps a fresh one-shot `set_time` into `config.json` for air-gapped clock setting |
 | `ha-helpers.yaml` | HA package creating the three queued-control helpers (Press, Keep Awake, Config Queue) |
-| `sd-config-design.md` | Air-gapped SD-card configuration: design + implementation notes |
+| `sd-config-design.md` | Air-gapped SD-card configuration & firmware update: design + implementation notes |
 | `config.json.example` | Template for the SD `config.json` |
+| `Makefile` | `build` / `deploy` / `release` / `test` (see below) |
+| `release.py` | Drives the Device Builder's compile + OTA through HA's ingress proxy |
 
 Only the main YAML and the `reterminal-e1001/` directory go to the
 ESPHome builder folder (`make deploy`); everything project-specific lives
 in that subfolder so the builder sees exactly one device.
+
+## Build, deploy, release (Makefile)
+
+- `make deploy` — tar-over-ssh copy of the file set to `/config/esphome`
+  on the HA host (`HOST=`/`USER=` overridable); the host's `secrets.yaml`
+  is never touched.
+- `make release` — deploy, then the Device Builder compiles and
+  OTA-installs. The builder is ingress-only (no TCP port, its listener
+  accepts only the supervisor), so `release.py` mints an ingress session
+  over HA's websocket API with the deployed `ha_api_token` (non-admin
+  suffices) and drives the builder's compile/upload endpoints through
+  `http://<ha>:8123`, streaming the build log. The add-on is discovered
+  via the supervisor (`BUILDER=auto`; pass a slug to skip). The OTA
+  retries for ~5 min — wake the device or switch on the keep-awake
+  helper. One release at a time: the builder's job runner cancels a
+  running compile when another upload job starts. HA's own firmware
+  update entity is *not* used — it is version-gated and never notices
+  YAML-only changes.
+- `make build` — local compile (pinned `ESPHOME_VERSION`, matching the
+  builder; needs the real `secrets.yaml` beside the yaml since its values
+  are baked in), producing the app image for the SD firmware update.
+- `make test` — host unit tests + `config.json.example` validation.
 
 ## Pages
 
@@ -55,8 +83,10 @@ in that subfolder so the builder sees exactly one device.
 3. **Temperature — 24 h** — one line per enabled column (solid / dashed /
    sparse), legend with labels and current values on the title line.
 4. **Humidity — 24 h** — same layout.
-5. **Week** — temperature and humidity stacked, vertical inverted TEMP/HUM
-   titles, one centered legend, shared weekday axis, `data HH:MM` stamp.
+5. **Combo** — temperature and humidity stacked over **Combo Days**
+   (default 7 = one week), vertical inverted TEMP/HUM titles, one legend,
+   shared day axis (weekday names up to a week, day-of-month beyond),
+   `data HH:MM` stamp.
 6. **Analog clocks** — up to 5 dials (layout adapts to count), thick hands,
    long quarter markers, offsets in captions, home caption inverted,
    **night zones rendered as inverted dials** (window configurable).
@@ -65,9 +95,11 @@ in that subfolder so the builder sees exactly one device.
    build time by `gen_fa_assets.py`; Vazirmatn body, Noqte title), picked
    with the ESP32's hardware RNG and rotated every 6 hours.
 
-Inverted status bar on pages 2–6: Solar Hijri date left, Gregorian
+Inverted status bar on the pages listed in **Status Bar Pages**
+(comma-separated, default `2,3,4,5`): Solar Hijri date left, Gregorian
 (`Wed 15 Jul 2026`) centered; right side, growing leftward: battery %,
-SD-card icon (when a card is inserted), `RTC!` warning (RTC had no valid
+lit-bulb icon (device held awake by Pause Deep Sleep or the keep-awake
+helper), SD-card icon (card inserted), `RTC!` warning (RTC had no valid
 time at boot — dead/missing CR1220), device `T 25° H 48` (toggleable).
 
 ## Physical buttons
@@ -87,15 +119,20 @@ a disabled radio for one wake (the recovery path). Every press beeps.
 Page Previous, Onboard LED, Buzzer (raw, continuous).
 
 **Configuration:** Start Page (after cold boot; invalid → first page),
-Home Timezone (city name), Zone 1–5 (spec, see below) with Zone 1–5
-Enabled toggles, Column 1–3 (climate sources, see below), HA URL and HA
-Token (REST endpoint — seeded from secrets, editable without reflashing),
-HA Sync Interval (minutes between API syncs, default 15), Night From/To
-(analog night window), Show 1–8 (per-page visibility; navigation,
-auto-cycle, and start page skip hidden pages), Page Auto-Cycle (one page
-per timer wake, default off), Radio (persisted wifi kill), Status Bar
-Climate, Status Bar Solar Hijri, Pause Deep Sleep (RAM-only — any reset
-re-enables sleep).
+Home Zone (1-based zone slot: inverted row/dial caption and the offset
+base; empty/invalid slot falls back to the first zone), Zone 1–5 (spec,
+see below) with Zone 1–5 Enabled toggles, Column 1–3 (climate sources,
+see below), HA URL and HA Token (REST endpoint — seeded from secrets,
+editable without reflashing), Refresh Interval (display cadence: the
+deep-sleep wake interval *and* the redraw interval while held awake,
+default 3 min), HA Sync Interval (minutes between API syncs, default 15),
+Combo Days (span of the combined page, default 7; changing it resets the
+window and refetches), Night From/To (analog night window), Show 1–8
+(per-page visibility; navigation, auto-cycle, and start page skip hidden
+pages), Status Bar Pages (comma-separated page numbers, default
+`2,3,4,5`), Page Auto-Cycle (one page per timer wake, default off), Radio
+(persisted wifi kill), Status Bar Climate, Status Bar Solar Hijri, Pause
+Deep Sleep (RAM-only — any reset re-enables sleep).
 
 **HA-queued controls** — helpers, not device entities. Commanding a native
 entity is an *event* over the live API connection: with the device asleep
@@ -116,8 +153,9 @@ controls, and optionally assign them the device's Area:
   awake (beeps once when it receives it). Turn off to resume sleeping.
 - `input_text.reterminal_config` — semicolon-separated config changes,
   e.g. `zone3=Asia/Dubai;show7=off;night=19-7;col1=Device=dev`. Keys:
-  `zone1..zone5` and `col1..col3` (spec or empty), `home`, `night=F-T`,
-  `start=N`, `sync=MIN`, `bar=DIGITS`, `cycle|showN=on|off`. Applied at the next sync
+  `zone1..zone5` and `col1..col3` (spec or empty), `home=SLOT`,
+  `night=F-T`, `start=N`, `sync=MIN`, `refresh=MIN`, `days=N`,
+  `bar=2,3,4,5`, `cycle|showN=on|off`. Applied at the next sync
   (instantly while awake) into the device's persisted config entities,
   then the field is cleared as the acknowledgement + one beep — empty
   field = consumed, text still present = not delivered yet. Clearing
@@ -141,9 +179,9 @@ Invalid specs are skipped (logged); labels are limited to the compiled
 glyph set (ASCII). Both clock pages render whatever the list holds — row
 spacing and dial layout are computed from the count. The POSIX-rule parser
 handles day-of-week rules, southern-hemisphere (wrapped) DST periods, and
-Ireland-style negative DST. The same store is the target of the future SD
-`config.json`; a `tzdata.csv` on the card is planned to override the
-embedded table (see `sd-config-design.md`).
+Ireland-style negative DST. The SD `config.json` targets the same store,
+and a `tzdata.csv` on the card overrides the embedded table (see
+`sd-config-design.md`).
 
 ## Climate columns are data, not code
 
@@ -160,15 +198,17 @@ config (and SD fields), so sensor changes never require a reflash.
   time and the queued helpers. This "HA sync" runs only on cold boot,
   green press, or every **HA Sync Interval** minutes — not per wake.
 - **Device → HA** (REST, Bearer token, firewall pinhole IoT→HA:8123):
-  current values via `/api/states`, 24 h and 7-day history via
+  current values via `/api/states`, 24 h and Combo-Days history via
   `/api/history/period` with explicit `end_time`, streamed through a
-  `}`-split scanner (no big buffers), bucketed (7.5 min / 52.5 min),
+  `}`-split scanner (no big buffers), bucketed (window ÷ 192 points),
   forward-filled, committed per row.
 - **Gating:** a wake only waits for the network (10 s wifi, 2 s API — LAN)
   when a sync is due/forced or the shown page has HA-sourced columns with
-  work to do (stale history, live values). Everything else is a
-  radio-quiet redraw. Both history windows roll forward every wake, so
-  dev-sourced curves stay continuous regardless of network.
+  work to do (stale history, live values). Flipping onto a data page whose
+  HA values are missing or stale triggers a fetch, asleep or awake.
+  Everything else is a radio-quiet redraw. Both history windows roll
+  forward every wake, so dev-sourced curves stay continuous regardless of
+  network.
 - **History persistence:** series are int16 (value × 100) in RTC memory
   (survives deep sleep) and snapshotted hourly to the 24 MB `hist` flash
   partition (survives power loss and reflash; restored on cold boot; wear
@@ -176,11 +216,14 @@ config (and SD fields), so sensor changes never require a reflash.
 
 ## Sleep model
 
-No `run_duration`, no idle window. Every command — buttons (physical or
-HA), LED, buzzer, any config change — bumps a deadline a 5 s grace ahead;
-a 1 s watcher enters deep sleep (5 min) once the deadline passes, no
-command script is running, and the queued keep-awake is off. A typical
-timer wake is therefore ~12 s total. OTA freezes sleep entirely. State
+No `run_duration`, no idle window. Autonomous work bumps a deadline a 2 s
+grace ahead; user interaction — buttons (physical or HA), LED, buzzer,
+any config change — bumps it 30 s ahead. A 1 s watcher enters deep sleep
+for **Refresh Interval** minutes once the deadline passes, no command
+script is running, and the queued keep-awake is off; while the device is
+held awake, the same watcher redraws whenever a refresh interval elapses,
+so the clocks never freeze. A typical timer wake is ~12 s total. OTA
+freezes sleep entirely. State
 that must survive sleep (page, graphs, cached values, fetch/sync stamps)
 lives in RTC slow memory (~5 KB of 8 KB); preferences live in NVS flash
 and survive power loss; graphs additionally survive power loss via the
@@ -205,9 +248,10 @@ deep sleep with RTC-timer + ext1 wake on GPIO3/4/5 (wake pin identified
 via `esp_sleep_get_ext1_wakeup_status`); 8 KB RTC slow memory; PCF8563
 external RTC (I²C, CR1220 backup — the `VL`/`STOP` flags surface as the
 `RTC!` warning); SHT4x temp/humidity; ADC battery sense behind a 1:2
-divider with enable rail; LEDC buzzer PWM; SD slot (card-detect GPIO15,
-power rail GPIO16 — filesystem access pending an external component);
-CH340K UART0 for logs/flashing. GPIO3/45 strapping-pin and GPIO19/20
+divider with enable rail; LEDC buzzer PWM; SD slot (FAT32 via the Arduino
+`SD` lib on the shared SPI bus — CS GPIO14, card-detect GPIO15, power
+rail GPIO16); CH340K UART0 for logs/flashing. GPIO3/45 strapping-pin and
+GPIO19/20
 USB-Serial-JTAG validation warnings are inherent to the board wiring and
 harmless.
 
@@ -227,19 +271,29 @@ FAT32 card, processed at boot and on insertion (two short beeps = applied,
 one long = rejected; details and schema in `sd-config-design.md`):
 
 - `/config.json` — full configuration as data (zones, columns, HA
-  endpoint, pages, night window, one-shot `set_time` for clock setting
-  with no network). Applied once per content change, backed up on the card
-  as `/<date>.config.json` (newest 5 kept).
+  endpoint, pages, intervals, night window, one-shot `set_time` for clock
+  setting with no network). Applied once per content change, backed up on
+  the card as `/<date>.config.json` (newest 5 kept).
 - `/tzdata.csv` — overrides the embedded IANA table (air-gapped tzdata
   updates without reflashing; regenerate with `gen_tzdata.py`).
+- `/firmware.bin` — air-gapped firmware update: the app image from
+  `make build` is flashed into the passive OTA slot (fingerprint-gated,
+  CRC-compared, validated before the boot slot switches) and booted. An
+  image that never completes a boot rolls back to the previous slot after
+  three attempts — the same guard arms on network OTA. Details in
+  `sd-config-design.md`.
 
 ## Operational notes
 
 - **The first install of a partition-table change (this build) must go
   over USB** — OTA cannot rewrite the partition table. Subsequent updates
-  OTA as usual.
-- OTA only while awake: press a button first (or Pause Deep Sleep /
-  keep-awake helper).
+  OTA (`make release`) or go via the SD card.
+- OTA only while awake: `make release` retries the upload for ~5 min —
+  press a button or switch on the keep-awake helper within that window.
+- Before updating the Device Builder add-on, compile locally against the
+  new version first (`make build ESPHOME_VERSION=<next>`) — framework
+  migrations (like 2026.7's Arduino-as-IDF-component) surface there
+  instead of breaking the release path.
 - Reflash/power loss clears RTC memory; graphs repopulate on the next
   fetch (or in device-only mode, refill at one sample per wake).
 - The 7-day view needs HA recorder retention ≥ 7 days (default 10).

@@ -8,9 +8,8 @@ validates, applies, persists, and beeps. No flashing, no network.
 the shared SPI bus, CS GPIO14, card-detect GPIO15, power rail GPIO16), no
 external component needed. Processing runs at boot and on card insertion.
 
-Firmware *logic* updates still need USB (esptool / ESPHome Web on a
-desktop). A custom SD-OTA step (reading `firmware.bin` into the inactive
-OTA partition) is possible later but out of scope here.
+Firmware updates work from the card too — see "Firmware update" below;
+only partition-table changes still need USB.
 
 ## File
 
@@ -21,15 +20,17 @@ OTA partition) is possible later but out of scope here.
 |---|---|---|
 | `version` | int | schema version, must be `1` |
 | `set_time` | ISO-8601 UTC string | one-shot clock set (see below) |
-| `home_zone` | string | city name; must match one entry in `zones` |
+| `home_zone` | int 1..5 | zone slot shown as home (inverted, offset base) |
 | `zones` | array (1..5) | world clock zones, replaces the stored list |
 | `columns` | array (1..3) | climate columns: `{"label", "source"}` where source is `"dev"` or `"<temp_entity>,<hum_entity>"` |
 | `ha_url`, `ha_token` | string | HA REST endpoint |
 | `sync_interval_min` | int ≥1 | minutes between HA syncs |
+| `refresh_interval_min` | int ≥1 | display refresh cadence: deep-sleep wake interval and held-awake redraw interval |
+| `combo_days` | int 1..31 | span of the combined temp/hum page (7 = one week) |
 | `start_page` | int ≥1 | page after cold boot |
 | `night_from`, `night_to` | int 0..23 | analog dial night-inversion hours |
 | `show_pages` | array of 8 bools | per-page visibility |
-| `bar_pages` | string | pages showing the status bar, as digits (e.g. `"2345"`) |
+| `bar_pages` | string | pages showing the status bar, comma-separated (e.g. `"2,3,4,5"`) |
 
 Zone object: either `{"tz": "Asia/Tehran", "label": "Tehran"}` (IANA name
 resolved against the tz table, `label` optional) or the manual form:
@@ -44,8 +45,8 @@ count.
 
 The IANA-name lookup uses an embedded table generated from upstream tzdata
 (`tzdata.h`, built by `gen_tzdata.py`, *current* rules only). The same rows
-exist as `tzdata.csv` (`name,posix` per line). When SD support lands, a
-`/tzdata.csv` on the card **overrides** the embedded table at boot — it is
+exist as `tzdata.csv` (`name,posix` per line). A `/tzdata.csv` on the
+card **overrides** the embedded table at boot — it is
 reference data, not configuration, so it lives beside `config.json`, not
 inside it. That gives an air-gapped path to tzdata updates: regenerate the
 CSV on any computer, copy it to the card, done — no reflash.
