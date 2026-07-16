@@ -18,12 +18,15 @@ esphome:
   includes:
     - reterminal-e1001/reterminal
     - reterminal-e1001/reterminal.h
-  # Arduino libs for the HA history fetch; ESPHome builds with the library
-  # dependency finder off, so they must be listed explicitly
+  # Arduino bundled libs for the HA fetch + SD stack. Since 2026.7 the core
+  # builds as an IDF component with selective compilation, and these names
+  # switch the libraries on (core 3.x renamed WiFiClientSecure to
+  # NetworkClientSecure; unknown names are looked up in the registry and
+  # fail the build).
   libraries:
-    - WiFi
-    - WiFiClientSecure
     - HTTPClient
+    - Network
+    - NetworkClientSecure
     - SPI
     - FS
     - SD

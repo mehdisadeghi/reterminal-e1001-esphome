@@ -15,7 +15,7 @@ BIN = .esphome/build/$(NAME)/.pioenvs/$(NAME)/firmware.bin
 # secrets.yaml beside $(YAML) — its values are baked into the binary.
 # Pinned to the device builder's version; newer resolvers also reject the
 # bare Arduino library names in the yaml.
-ESPHOME_VERSION ?= 2026.6.5
+ESPHOME_VERSION ?= 2026.7.0
 build:
 	uvx esphome@$(ESPHOME_VERSION) compile $(YAML)
 	@echo "copy $(BIN) to the card as /firmware.bin"
@@ -28,10 +28,12 @@ deploy:
 # Deploy, then have the ESPHome Device Builder compile and OTA-install the
 # firmware. HA's firmware update entity is version-gated and never sees
 # YAML-only changes, so this drives the builder's own compile/upload API
-# through an ssh tunnel (its port is internal to the add-on network). The
-# device must wake for the OTA step (green button or the keep-awake helper);
-# the upload retries while it sleeps.
-BUILDER ?= 5c53de3b-esphome
+# through HA core's authenticated ingress proxy on port 8123 (the builder
+# is ingress-only; ssh is used just to read the deployed secrets and the
+# ingress path). "auto" discovers the builder add-on via the supervisor;
+# override with its slug to skip that. The device must wake for the OTA
+# step (green button or keep-awake); the upload retries while it sleeps.
+BUILDER ?= auto
 release: deploy
 	uv run --with esphome-dashboard-api python3 release.py $(USER)@$(HOST) $(BUILDER) $(YAML)
 
