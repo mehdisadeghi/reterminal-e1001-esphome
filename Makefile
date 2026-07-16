@@ -14,13 +14,15 @@ DIRS = reterminal-e1001
 deploy:
 	COPYFILE_DISABLE=1 tar cf - $(FILES) $(DIRS) | ssh $(USER)@$(HOST) "mkdir -p $(TARGET_DIR) && tar xvf - -C $(TARGET_DIR)"
 
-# Deploy, then ask Home Assistant to build + OTA-install through the
-# ESPHome integration's firmware update entity (the add-on does the work).
-# Runs on the HA host via the supervisor's core API proxy; the device must
-# be awake for the OTA step (press a button, or use the keep-awake helper).
-UPDATE_ENTITY ?= update.reterminal_e1001_firmware
+# Deploy, then have the ESPHome Device Builder compile and OTA-install the
+# firmware. HA's firmware update entity is version-gated and never sees
+# YAML-only changes, so this drives the builder's own compile/upload API
+# through an ssh tunnel (its port is internal to the add-on network). The
+# device must wake for the OTA step (green button or the keep-awake helper);
+# the upload retries while it sleeps.
+BUILDER ?= 5c53de3b-esphome
 release: deploy
-	ssh $(USER)@$(HOST) "sh -s -- $(UPDATE_ENTITY)" < release_remote.sh
+	uv run --with esphome-dashboard-api python3 release.py $(USER)@$(HOST) $(BUILDER) $(YAML)
 
 # Host-side checks: pure-logic unit tests + example config validation
 test:
