@@ -1,20 +1,29 @@
 #!/bin/sh
-# Runs on the HA host (piped by `make release` into a login shell so the
-# profile exports SUPERVISOR_TOKEN): asks HA to compile + OTA through the
-# ESPHome integration's firmware update entity.
+# Runs on the HA host (piped by `make release`): asks HA to compile + OTA
+# through the ESPHome integration's firmware update entity. Auth: the
+# long-lived token from the deployed secrets.yaml, against HA's own API —
+# the SSH add-on's SUPERVISOR_TOKEN is not authorized for the core proxy.
 
 entity="${1:?usage: release_remote.sh <update entity id>}"
+secrets="/config/esphome/secrets.yaml"
 
-if [ -z "$SUPERVISOR_TOKEN" ]; then
-  echo "SUPERVISOR_TOKEN is not set in this shell (SSH add-on without hassio API?)" >&2
+# value of a top-level "key: value" line, quotes and spaces stripped
+get() {
+  grep "^$1:" "$secrets" | head -1 | cut -d: -f2- | tr -d ' "'
+}
+
+token=$(get ha_api_token)
+ip=$(get ha_http_ip)
+if [ -z "$token" ] || [ -z "$ip" ]; then
+  echo "ha_api_token/ha_http_ip not found in $secrets" >&2
   exit 1
 fi
 
 code=$(curl -s -o /tmp/release_out -w '%{http_code}' -X POST \
-  -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+  -H "Authorization: Bearer $token" \
   -H "Content-Type: application/json" \
   -d "{\"entity_id\": \"$entity\"}" \
-  http://supervisor/core/api/services/update/install)
+  "http://$ip:8123/api/services/update/install")
 
 if [ "$code" != "200" ]; then
   echo "HA answered HTTP $code:" >&2
