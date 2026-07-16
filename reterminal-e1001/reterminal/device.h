@@ -11,8 +11,10 @@
 #include <sys/time.h>
 #include <string>
 #include "esp_attr.h"
+#include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_sleep.h"
+#include "esphome/core/application.h"
 #include "esphome/core/log.h"
 #include "esphome/core/preferences.h"
 #include "pure.h"
@@ -521,9 +523,10 @@ inline Snapshot &snap_buf() {
   return s;
 }
 
-inline uint32_t crc32_buf(const void *data, size_t len) {
+// One-shot by default; pass the previous return value as crc to stream.
+inline uint32_t crc32_buf(const void *data, size_t len, uint32_t crc = 0) {
   const uint8_t *b = (const uint8_t *) data;
-  uint32_t c = 0xFFFFFFFF;
+  uint32_t c = ~crc;
   for (size_t i = 0; i < len; i++) {
     c ^= b[i];
     for (int k = 0; k < 8; k++)
@@ -891,5 +894,161 @@ inline std::string sd_process() {
   return ch;
 }
 
+// --- SD firmware update & app-level rollback ----------------------------------
+//
+// /firmware.bin on the card (the plain OTA app image, not *.factory.bin) is
+// flashed into the passive app slot and booted. The Arduino framework ships
+// a bootloader without rollback support, so the safety net is app level:
+// flashing arms an NVS record, the earliest boot hook counts boot attempts
+// while it is armed, and a completed boot_flow confirms the image; after
+// FW_BOOT_TRIES failed attempts the previous slot boots again.
+
+struct FwMark {  // fingerprint of the last applied /firmware.bin
+  uint32_t size;
+  uint32_t mtime;
+  uint32_t crc;
+};
+
+struct FwPending {  // armed between flashing and a confirmed boot
+  bool armed;
+  uint8_t attempts;
+  uint32_t prev_addr;
+};
+
+constexpr uint32_t FW_MARK_KEY = 0x46574D4B;     // 'FWMK'
+constexpr uint32_t FW_PENDING_KEY = 0x46575044;  // 'FWPD'
+constexpr int FW_BOOT_TRIES = 3;
+static bool sd_fw_error = false;  // last flash attempt failed
+
+inline void rollback_arm() {
+  FwPending p = {true, 0, esp_ota_get_running_partition()->address};
+  auto pref = esphome::global_preferences->make_preference<FwPending>(FW_PENDING_KEY);
+  pref.save(&p);
+  esphome::global_preferences->sync();
+}
+
+inline void rollback_confirm() {
+  auto pref = esphome::global_preferences->make_preference<FwPending>(FW_PENDING_KEY);
+  FwPending p{};
+  if (!pref.load(&p) || !p.armed)
+    return;
+  p.armed = false;
+  pref.save(&p);
+  esphome::global_preferences->sync();
+  ESP_LOGI(TAG, "firmware update confirmed");
+}
+
+// Earliest boot hook. The attempt counter must hit flash before anything
+// that could crash runs, or a bootloop would never be counted.
+inline void rollback_check() {
+  auto pref = esphome::global_preferences->make_preference<FwPending>(FW_PENDING_KEY);
+  FwPending p{};
+  if (!pref.load(&p) || !p.armed)
+    return;
+  p.attempts++;
+  pref.save(&p);
+  esphome::global_preferences->sync();
+  if (p.attempts < FW_BOOT_TRIES)
+    return;
+  p.armed = false;
+  pref.save(&p);
+  esphome::global_preferences->sync();
+  // the esp_partition_t registry entries outlive the iterator
+  const esp_partition_t *prev = nullptr;
+  esp_partition_iterator_t it =
+      esp_partition_find(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, nullptr);
+  for (; it != nullptr && prev == nullptr; it = esp_partition_next(it))
+    if (esp_partition_get(it)->address == p.prev_addr)
+      prev = esp_partition_get(it);
+  esp_partition_iterator_release(it);
+  if (prev == nullptr) {
+    ESP_LOGE(TAG, "rollback: previous slot not found");
+    return;
+  }
+  ESP_LOGE(TAG, "boot never completed; rolling back to %s", prev->label);
+  esp_ota_set_boot_partition(prev);
+  esp_restart();
+}
+
+// True = a new image was flashed and the boot slot switched; the caller
+// reboots. A size+mtime fingerprint in NVS keeps the per-wake cost at one
+// stat; the content CRC decides whether to actually flash.
+inline bool sd_flash_firmware() {
+  sd_fw_error = false;
+  if (!sd_mount())
+    return false;
+  File f = SD.open("/firmware.bin");
+  if (!f)
+    return false;
+  auto pref = esphome::global_preferences->make_preference<FwMark>(FW_MARK_KEY);
+  FwMark last{};
+  pref.load(&last);
+  FwMark cur = {(uint32_t) f.size(), (uint32_t) f.getLastWrite(), 0};
+  if (cur.size == last.size && cur.mtime == last.mtime) {
+    f.close();
+    return false;
+  }
+  static uint8_t buf[4096];
+  uint8_t magic = 0;
+  bool first_chunk = true;
+  int n;
+  while ((n = f.read(buf, sizeof(buf))) > 0) {
+    if (first_chunk) {
+      magic = buf[0];
+      first_chunk = false;
+    }
+    cur.crc = crc32_buf(buf, n, cur.crc);
+    esphome::App.feed_wdt();
+  }
+  if (cur.crc == last.crc) {  // same image, touched timestamps: just remember
+    pref.save(&cur);
+    f.close();
+    return false;
+  }
+  const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+  if (next == nullptr || magic != 0xE9 || cur.size < 65536 || cur.size > next->size) {
+    ESP_LOGW(TAG, "firmware.bin is not a flashable app image");
+    sd_fw_error = true;
+    f.close();
+    return false;
+  }
+  ESP_LOGI(TAG, "flashing %u bytes into %s", cur.size, next->label);
+  f.seek(0);
+  esp_ota_handle_t h;
+  if (esp_ota_begin(next, cur.size, &h) != ESP_OK) {
+    ESP_LOGW(TAG, "esp_ota_begin failed");
+    sd_fw_error = true;
+    f.close();
+    return false;
+  }
+  bool ok = true;
+  while (ok && (n = f.read(buf, sizeof(buf))) > 0) {
+    ok = esp_ota_write(h, buf, n) == ESP_OK;
+    esphome::App.feed_wdt();
+  }
+  f.close();
+  if (!ok) {
+    esp_ota_abort(h);
+    ESP_LOGW(TAG, "flash write failed");
+    sd_fw_error = true;
+    return false;
+  }
+  if (esp_ota_end(h) != ESP_OK) {  // full image validation happens here
+    ESP_LOGW(TAG, "firmware image failed validation");
+    sd_fw_error = true;
+    return false;
+  }
+  rollback_arm();
+  if (esp_ota_set_boot_partition(next) != ESP_OK) {
+    rollback_confirm();
+    ESP_LOGW(TAG, "could not switch the boot slot");
+    sd_fw_error = true;
+    return false;
+  }
+  pref.save(&cur);
+  esphome::global_preferences->sync();
+  ESP_LOGI(TAG, "firmware flashed; rebooting into %s", next->label);
+  return true;
+}
 
 }  // namespace reterminal

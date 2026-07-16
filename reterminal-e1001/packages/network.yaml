@@ -91,6 +91,11 @@ ota:
         - lambda: |-
             reterminal::ota_in_progress = false;
             reterminal::bump_awake();
+    # Network OTA gets the same self-rollback guard as SD updates: armed
+    # here (still running the old image), confirmed by the next boot_flow
+    on_end:
+      then:
+        - lambda: 'reterminal::rollback_arm();'
 
 # Wi-Fi settings / Wi-Fi 设置
 wifi:

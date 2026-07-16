@@ -77,6 +77,28 @@ write the *near-future* wall-clock time into the file, insert the card,
 and at the ack beeps the RTC is set. Precision is "seconds", which is fine
 for a wall clock re-synced this way a few times a year.
 
+## Firmware update
+
+`/firmware.bin` on the card — the plain OTA app image from `make build`
+(needs the real `secrets.yaml` beside the main yaml; never `*.factory.bin`,
+which embeds the bootloader and is USB-only) — is flashed into the passive
+app slot and booted. Two short beeps, then the device reboots into the new
+image; the card's `config.json` is processed on that next boot.
+
+- Cheap per-wake gate: file size+mtime are compared against an NVS
+  fingerprint; only a changed file is read fully, and only a changed CRC is
+  flashed. Leaving the card inserted costs one stat per wake.
+- `esp_ota_end()` validates the image before the boot slot is switched; a
+  truncated or wrong-target file is rejected with one long beep.
+- Rollback is app-level (the Arduino bootloader lacks
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`): flashing arms an NVS record, the
+  earliest boot hook counts boot attempts while armed, and a completed
+  `boot_flow` confirms the image. Three failed attempts switch back to the
+  previous slot. Network OTA arms the same guard. The limit: an image that
+  crashes before the first boot hook runs is not caught — that class is
+  covered by the pre-boot image validation above.
+- Partition-table changes still require USB.
+
 ## Failure behavior
 
 - No card / no file: nothing happens (normal operation).

@@ -4,10 +4,21 @@ TARGET_DIR ?= /config/esphome
 DEVICE ?= reterminal-e1001.local
 
 YAML = esphome-reterminal-e1001.yaml
+NAME = reterminal-e1001
 FILES = $(YAML)
 DIRS = reterminal-e1001
+BIN = .esphome/build/$(NAME)/.pioenvs/$(NAME)/firmware.bin
 
-.PHONY: deploy release test
+.PHONY: build deploy release test
+
+# Compile locally into an SD-flashable app image. Needs the real
+# secrets.yaml beside $(YAML) — its values are baked into the binary.
+# Pinned to the device builder's version; newer resolvers also reject the
+# bare Arduino library names in the yaml.
+ESPHOME_VERSION ?= 2026.6.5
+build:
+	uvx esphome@$(ESPHOME_VERSION) compile $(YAML)
+	@echo "copy $(BIN) to the card as /firmware.bin"
 
 # Copy the builder file set to the HA host (secrets.yaml stays untouched).
 # tar-over-ssh: the HA SSH add-on has no rsync, but BusyBox tar is there.

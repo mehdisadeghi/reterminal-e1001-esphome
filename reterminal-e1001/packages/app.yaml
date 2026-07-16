@@ -183,27 +183,37 @@ script:
           condition:
             binary_sensor.is_on: sd_card_detect
           then:
-            - lambda: |-
-                std::string ch = reterminal::sd_process();
-                if (!ch.empty())
-                  reterminal::pending_changes = ch;
+            # New firmware boots first; /config.json is then processed by
+            # the next boot's sd_check, already on the new image
             - if:
                 condition:
-                  lambda: 'return reterminal::sd_time_was_set;'
+                  lambda: 'return reterminal::sd_flash_firmware();'
                 then:
-                  - pcf8563.write_time:
-                  - lambda: 'reterminal::sd_time_was_set = false;'
-            - if:
-                condition:
-                  lambda: 'return !reterminal::pending_changes.empty();'
-                then:
-                  - script.execute: apply_changes
                   - script.execute: beep_ok
-            - if:
-                condition:
-                  lambda: 'return reterminal::sd_error;'
-                then:
-                  - script.execute: beep_err
+                  - delay: 1s
+                  - lambda: 'App.safe_reboot();'
+                else:
+                  - lambda: |-
+                      std::string ch = reterminal::sd_process();
+                      if (!ch.empty())
+                        reterminal::pending_changes = ch;
+                  - if:
+                      condition:
+                        lambda: 'return reterminal::sd_time_was_set;'
+                      then:
+                        - pcf8563.write_time:
+                        - lambda: 'reterminal::sd_time_was_set = false;'
+                  - if:
+                      condition:
+                        lambda: 'return !reterminal::pending_changes.empty();'
+                      then:
+                        - script.execute: apply_changes
+                        - script.execute: beep_ok
+                  - if:
+                      condition:
+                        lambda: 'return reterminal::sd_error || reterminal::sd_fw_error;'
+                      then:
+                        - script.execute: beep_err
 
   - id: beep_ok
     mode: single
@@ -413,6 +423,8 @@ script:
                 else:
                   - component.update: epaper_display
                   - lambda: 'reterminal::bump_awake();'
+      # Reaching the end of a boot confirms a freshly flashed firmware
+      - lambda: 'reterminal::rollback_confirm();'
 
 binary_sensor:
   # HA-queued keep-awake: create a Toggle helper with entity id
