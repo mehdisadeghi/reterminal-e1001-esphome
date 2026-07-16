@@ -30,7 +30,6 @@ static const char *const TAG = "reterminal";
 constexpr int PAGE_COUNT = 8;  // clock, numbers, temp, hum, week, analog, noqte, khayyam
 constexpr int POINTS = 192;    // buckets per window
 constexpr time_t SPAN = 24 * 3600;
-constexpr time_t SPAN_WEEK = 7 * 24 * 3600;
 constexpr time_t FETCH_INTERVAL = 3 * 3600;
 constexpr time_t MIN_VALID_EPOCH = 1600000000;  // clock has been synced at least once
 
@@ -362,25 +361,25 @@ inline bool parse_zone(const char *s, Zone &z) {
   return true;
 }
 
-// Empty specs are skipped, invalid ones logged and skipped; the home city is
-// matched by name and falls back to the first zone.
+// Empty specs are skipped, invalid ones logged and skipped; home is the
+// 1-based slot index and falls back to the first zone.
 inline void rebuild_zones(const char *z1, const char *z2, const char *z3, const char *z4,
-                          const char *z5, const char *home_city) {
+                          const char *z5, int home_slot) {
   const char *in[MAX_ZONES] = {z1, z2, z3, z4, z5};
   zone_count = 0;
+  home_zone = 0;
   for (int i = 0; i < MAX_ZONES; i++) {
     if (in[i] == nullptr || in[i][0] == 0)
       continue;
     Zone z;
-    if (parse_zone(in[i], z))
+    if (parse_zone(in[i], z)) {
+      if (i == home_slot - 1)
+        home_zone = zone_count;
       zones[zone_count++] = z;
-    else
+    } else {
       RT_LOGW(TAG, "invalid zone spec: %s", in[i]);
+    }
   }
-  home_zone = 0;
-  for (int i = 0; i < zone_count; i++)
-    if (strcasecmp(zones[i].city, home_city) == 0)
-      home_zone = i;
 }
 
 // UTC epoch of the week'th dow (week 5 = last) of month at a local hour;

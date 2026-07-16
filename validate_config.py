@@ -142,13 +142,15 @@ def main():
     if doc.get("version") != 1:
         err("version: must be 1")
 
-    names = []
+    zone_count = 0
     if "zones" in doc:
         zones = doc["zones"]
         if not isinstance(zones, list) or not 1 <= len(zones) <= MAX_ZONES:
             err(f"zones: array of 1..{MAX_ZONES} required")
         else:
-            names = [check_zone(z, i, tztable) for i, z in enumerate(zones)]
+            zone_count = len(zones)
+            for i, z in enumerate(zones):
+                check_zone(z, i, tztable)
 
     if "columns" in doc:
         colsv = doc["columns"]
@@ -160,13 +162,14 @@ def main():
 
     if "home_zone" in doc:
         hz = doc["home_zone"]
-        if not isinstance(hz, str) or not hz:
-            err("home_zone: non-empty string required")
-        elif names and hz.lower() not in [n.lower() for n in names if n]:
-            warn(f"home_zone '{hz}' matches no zone; the device falls back to the first zone")
+        if not isinstance(hz, int) or not 1 <= hz <= MAX_ZONES:
+            err(f"home_zone: 1-based zone slot integer 1..{MAX_ZONES} required")
+        elif zone_count and hz > zone_count:
+            warn(f"home_zone {hz} > {zone_count} zones; the device falls back to the first zone")
 
     for key, lo, hi in (("night_from", 0, 23), ("night_to", 0, 23),
-                        ("sync_interval_min", 1, 1440)):
+                        ("sync_interval_min", 1, 1440), ("refresh_interval_min", 1, 1440),
+                        ("combo_days", 1, 31)):
         if key in doc and (not isinstance(doc[key], int) or not lo <= doc[key] <= hi):
             err(f"{key}: integer {lo}..{hi} required")
     if "start_page" in doc:
@@ -184,8 +187,9 @@ def main():
 
     if "bar_pages" in doc:
         bp = doc["bar_pages"]
-        if not isinstance(bp, str) or not all("1" <= c <= "8" for c in bp):
-            err("bar_pages: string of page digits 1..8 required, e.g. \"2345\"")
+        if not isinstance(bp, str) or (bp and not all(
+                len(t) == 1 and "1" <= t <= "8" for t in bp.split(","))):
+            err("bar_pages: comma-separated page numbers 1..8 required, e.g. \"2,3,4,5\"")
 
     if "ha_url" in doc and not str(doc["ha_url"]).startswith("http"):
         err("ha_url: must start with http")
@@ -202,8 +206,8 @@ def main():
             err("set_time: ISO-8601 UTC timestamp required, e.g. 2026-07-15T12:00:00Z")
 
     known = {"version", "set_time", "home_zone", "zones", "columns", "ha_url", "ha_token",
-             "sync_interval_min", "start_page", "night_from", "night_to", "show_pages",
-             "bar_pages"}
+             "sync_interval_min", "refresh_interval_min", "combo_days", "start_page",
+             "night_from", "night_to", "show_pages", "bar_pages"}
     for key in doc:
         if key not in known:
             warn(f"unknown key '{key}' (ignored by the device)")

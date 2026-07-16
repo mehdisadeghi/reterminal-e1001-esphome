@@ -35,6 +35,7 @@ inline int16_t pt_set(float v) {
 RTC_DATA_ATTR int page = 0;
 RTC_DATA_ATTR time_t fetch_time = 0;       // day window end; 0 = never rolled
 RTC_DATA_ATTR time_t week_fetch_time = 0;  // week window end
+RTC_DATA_ATTR int week_days = 7;           // combo page span in days
 RTC_DATA_ATTR time_t ha_fetch_at = 0;      // last successful HA history fetch
 RTC_DATA_ATTR int16_t series_day[MAX_COLS][2][POINTS];
 RTC_DATA_ATTR int16_t series_week[MAX_COLS][2][POINTS];
@@ -43,6 +44,8 @@ RTC_DATA_ATTR time_t last_val_time = 0;
 RTC_DATA_ATTR time_t ha_live_at = 0;  // last successful /api/states poll
 RTC_DATA_ATTR time_t beep_ack = 0;  // last handled "single beep" request
 RTC_DATA_ATTR time_t sync_attempt_at = 0;
+
+inline time_t week_span() { return (time_t) week_days * 86400; }
 
 // Awake bookkeeping (plain RAM, reset each wake). Any command bumps the
 // deadline a short grace ahead; an interval enters sleep once it passes and
@@ -69,6 +72,16 @@ inline void bump_interact() {
 
 inline bool sleep_due() { return !ota_in_progress && millis() > sleep_deadline; }
 
+// Display cadence: one config drives both the deep-sleep wake interval and
+// the redraw interval while the device is held awake (keep-awake / pause).
+static int refresh_interval_min = 3;
+static uint32_t last_draw_ms = 0;
+
+inline void mark_draw() { last_draw_ms = millis(); }
+inline bool redraw_due() {
+  return millis() - last_draw_ms >= (uint32_t) refresh_interval_min * 60000;
+}
+
 // Mirrors of HA entities and boot diagnostics, set from YAML.
 static bool radio_on = true;      // wifi enabled this wake
 static bool rtc_bad = false;      // RTC chip unusable at boot (dead cell / VL / frozen)
@@ -78,14 +91,18 @@ static int sync_interval_min = 15;
 static bool page_enabled_[PAGE_COUNT] = {true, true, true, true, true, true, true, true};
 static bool bar_on_[PAGE_COUNT] = {false, true, true, true, true, false, false, false};
 
-// "2345" = show the status bar on pages 2..5 (1-based digits)
+// "2,3,4,5" = show the status bar on pages 2..5 (1-based, comma-separated)
 inline void set_bar_pages(const char *s) {
   for (int i = 0; i < PAGE_COUNT; i++)
     bar_on_[i] = false;
-  for (; *s; s++) {
-    int d = *s - '1';
-    if (d >= 0 && d < PAGE_COUNT)
-      bar_on_[d] = true;
+  while (*s) {
+    const char *e = strchr(s, ',');
+    size_t len = e ? (size_t) (e - s) : strlen(s);
+    if (len == 1 && s[0] >= '1' && s[0] < '1' + PAGE_COUNT)
+      bar_on_[s[0] - '1'] = true;
+    else if (len)
+      ESP_LOGW(TAG, "bar pages: bad token '%.*s'", (int) len, s);
+    s += len + (e ? 1 : 0);
   }
 }
 
@@ -193,7 +210,7 @@ inline void tick_data(float dev_t, float dev_h) {
   if (now < MIN_VALID_EPOCH)
     return;
   roll_rows(series_day, fetch_time, SPAN / POINTS, now);
-  roll_rows(series_week, week_fetch_time, SPAN_WEEK / POINTS, now);
+  roll_rows(series_week, week_fetch_time, week_span() / POINTS, now);
   bool any = false;
   for (int i = 0; i < MAX_COLS; i++) {
     if (!cols[i].enabled || !cols[i].is_dev)
@@ -368,7 +385,7 @@ inline bool fetch_history(const char *base, const char *token) {
   if (!any_ha_col())
     return false;
   roll_rows(series_day, fetch_time, SPAN / POINTS, end);
-  roll_rows(series_week, week_fetch_time, SPAN_WEEK / POINTS, end);
+  roll_rows(series_week, week_fetch_time, week_span() / POINTS, end);
   static int16_t row[POINTS];
   bool all = true;
   for (int c = 0; c < MAX_COLS; c++) {
@@ -380,7 +397,7 @@ inline bool fetch_history(const char *base, const char *token) {
         memcpy(series_day[c][m], row, sizeof(row));
       else
         all = false;
-      if (fetch_entity(base, token, ent[m], end - SPAN_WEEK, SPAN_WEEK / POINTS, row))
+      if (fetch_entity(base, token, ent[m], end - week_span(), week_span() / POINTS, row))
         memcpy(series_week[c][m], row, sizeof(row));
       else
         all = false;
@@ -815,8 +832,8 @@ inline std::string sd_process() {
   }
 
   char kv[64];
-  if (doc["home_zone"].is<const char *>()) {
-    snprintf(kv, sizeof(kv), "home=%s", (const char *) doc["home_zone"]);
+  if (doc["home_zone"].is<int>()) {
+    snprintf(kv, sizeof(kv), "home=%d", (int) doc["home_zone"]);
     add(kv);
   }
   if (doc["night_from"].is<int>() && doc["night_to"].is<int>()) {
@@ -829,6 +846,14 @@ inline std::string sd_process() {
   }
   if (doc["sync_interval_min"].is<int>()) {
     snprintf(kv, sizeof(kv), "sync=%d", (int) doc["sync_interval_min"]);
+    add(kv);
+  }
+  if (doc["refresh_interval_min"].is<int>()) {
+    snprintf(kv, sizeof(kv), "refresh=%d", (int) doc["refresh_interval_min"]);
+    add(kv);
+  }
+  if (doc["combo_days"].is<int>()) {
+    snprintf(kv, sizeof(kv), "days=%d", (int) doc["combo_days"]);
     add(kv);
   }
   if (doc["show_pages"].is<JsonArray>()) {

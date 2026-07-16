@@ -68,14 +68,15 @@ text:
       then:
         - script.execute: zones_changed
 
-  # Pages showing the bottom status bar, as 1-based digits (e.g. "2345")
+  # Pages showing the bottom status bar, comma-separated 1-based page
+  # numbers (e.g. "2,3,4,5")
   - platform: template
     name: "Status Bar Pages"
     id: bar_pages
     optimistic: true
     restore_value: true
-    initial_value: "2345"
-    max_length: 8
+    initial_value: "2,3,4,5"
+    max_length: 15
     mode: text
     entity_category: config
     on_value:
@@ -83,21 +84,6 @@ text:
         - lambda: |-
             reterminal::set_bar_pages(x.c_str());
             reterminal::bump_interact();
-
-  # Matched against the zone cities by name; the match gets the inversion
-  # and is the base for the displayed offsets
-  - platform: template
-    name: "Home Timezone"
-    id: home_tz
-    optimistic: true
-    restore_value: true
-    initial_value: "Berlin"
-    max_length: 20
-    mode: text
-    entity_category: config
-    on_value:
-      then:
-        - script.execute: zones_changed
 
   # Climate columns (numbers page + graph lines), sources as data:
   #   "Label=dev"                          onboard SHT4x, sampled locally
@@ -167,6 +153,70 @@ text:
         - lambda: 'reterminal::bump_interact();'
 
 number:
+  # 1-based zone slot shown as home: inverted row/caption and the base for
+  # the displayed offsets. An empty or invalid slot falls back to the first
+  # zone.
+  - platform: template
+    name: "Home Zone"
+    id: home_zone_n
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+    min_value: 1
+    max_value: 5
+    step: 1
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
+
+  # Days covered by the combined temp/hum page (7 = one week). Changing it
+  # resets the window and forces a refetch on the next wake that shows it.
+  - platform: template
+    name: "Combo Days"
+    id: combo_days
+    optimistic: true
+    restore_value: true
+    initial_value: 7
+    min_value: 1
+    max_value: 31
+    step: 1
+    unit_of_measurement: "d"
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            int d = (int) x;
+            if (d >= 1 && d != reterminal::week_days) {
+              reterminal::week_days = d;
+              reterminal::week_fetch_time = 0;
+              reterminal::ha_fetch_at = 0;
+            }
+            reterminal::bump_interact();
+
+  # Minutes between display refreshes: the deep-sleep wake cadence, and the
+  # redraw cadence while the device is held awake.
+  - platform: template
+    name: "Refresh Interval"
+    id: refresh_interval
+    optimistic: true
+    restore_value: true
+    initial_value: 3
+    min_value: 1
+    max_value: 1440
+    step: 1
+    unit_of_measurement: "min"
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 1)
+              reterminal::refresh_interval_min = (int) x;
+            reterminal::bump_interact();
+
   # Minutes between HA syncs (API connect: time + queued helpers). Green
   # button and cold boot always sync.
   - platform: template

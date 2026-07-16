@@ -87,11 +87,23 @@ inline void draw_sd_icon(Display &it, int x, int y) {
     it.line(px, y + 2, px, y + 4, c);
 }
 
+// Lit bulb = the device is held awake (Pause Deep Sleep or keep-awake helper)
+inline void draw_awake_icon(Display &it, int x, int y) {
+  auto c = esphome::display::COLOR_OFF;
+  it.line(x + 5, y, x + 5, y + 1, c);  // rays
+  it.line(x, y + 2, x + 1, y + 3, c);
+  it.line(x + 9, y + 3, x + 10, y + 2, c);
+  it.circle(x + 5, y + 8, 4, c);  // glass
+  it.line(x + 3, y + 14, x + 7, y + 14, c);  // base
+  it.line(x + 3, y + 16, x + 7, y + 16, c);
+}
+
 // Bottom status bar, inverted, drawn on every page. Left: Solar Hijri date;
-// center: Gregorian date; right, growing leftwards: battery, SD-card icon,
-// RTC warning, device climate.
+// center: Gregorian date; right, growing leftwards: battery, awake bulb,
+// SD-card icon, RTC warning, device climate.
 inline void draw_status_bar(Display &it, BaseFont *small_f, float battery_pct, float dev_t,
-                            float dev_h, bool show_climate, bool sd_present, bool show_jalali) {
+                            float dev_h, bool show_climate, bool sd_present, bool show_jalali,
+                            bool awake_hold) {
   it.filled_rectangle(0, 446, 800, 34);
   time_t now = ::time(nullptr);
   if (now > MIN_VALID_EPOCH) {
@@ -112,6 +124,10 @@ inline void draw_status_bar(Display &it, BaseFont *small_f, float battery_pct, f
     it.printf(x, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_RIGHT, "%.0f%%",
               battery_pct);
     x -= 58;
+  }
+  if (awake_hold) {
+    draw_awake_icon(it, x - 11, 451);
+    x -= 24;
   }
   if (sd_present) {
     draw_sd_icon(it, x - 10, 456);
@@ -332,8 +348,8 @@ inline void draw_graph_page(Display &it, int metric, const char *title, BaseFont
   draw_graph_band(it, series_day, metric, fetch_time, SPAN, med, tiny_f, 48, 420, true);
 }
 
-// Combined 7-day page: temperature and humidity stacked, one legend, shared
-// weekday axis at the bottom, vertical inverted section titles.
+// Combined page over week_days: temperature and humidity stacked, one
+// legend, shared day axis at the bottom, vertical inverted section titles.
 inline void draw_week_page(Display &it, BaseFont *med, BaseFont *small_f, BaseFont *tiny_f) {
   if (no_cols(it, med))
     return;
@@ -358,25 +374,27 @@ inline void draw_week_page(Display &it, BaseFont *med, BaseFont *small_f, BaseFo
       char ch[2] = {band.tag[i], 0};
       it.print(16, ty + i * 30, small_f, esphome::display::COLOR_OFF, TextAlign::TOP_CENTER, ch);
     }
-    draw_graph_band(it, series_week, band.metric, week_fetch_time, SPAN_WEEK, med, tiny_f,
+    draw_graph_band(it, series_week, band.metric, week_fetch_time, week_span(), med, tiny_f,
                     band.y0, band.y1, false);
   }
 
-  // weekday labels centered per day, once, under the bottom band
+  // day labels centered per day, once, under the bottom band; weekday names
+  // repeat past a week, so longer spans label with the day of month
   if (week_fetch_time > MIN_VALID_EPOCH) {
     const int X0 = 80, X1 = 784;
+    time_t span = week_span();
     int loff = local_offset_min(week_fetch_time);
-    time_t lstart = week_fetch_time - SPAN_WEEK + (time_t) loff * 60;
+    time_t lstart = week_fetch_time - span + (time_t) loff * 60;
     time_t midnight0 = lstart - (lstart % 86400) + 86400;
-    for (time_t lm = midnight0 - 86400; lm < lstart + SPAN_WEEK; lm += 86400) {
+    for (time_t lm = midnight0 - 86400; lm < lstart + span; lm += 86400) {
       time_t center = lm + 43200;
-      if (center < lstart || center > lstart + SPAN_WEEK)
+      if (center < lstart || center > lstart + span)
         continue;
-      int x = X0 + (int) ((center - lstart) * (long) (X1 - X0) / SPAN_WEEK);
+      int x = X0 + (int) ((center - lstart) * (long) (X1 - X0) / span);
       struct tm dt;
       gmtime_r(&center, &dt);
       char day[8];
-      strftime(day, sizeof(day), "%a", &dt);
+      strftime(day, sizeof(day), week_days > 7 ? "%d" : "%a", &dt);
       it.print(x, 424, tiny_f, TextAlign::TOP_CENTER, day);
     }
   }

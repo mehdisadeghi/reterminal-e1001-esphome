@@ -74,7 +74,16 @@ interval:
           then:
             # Persist history to the flash partition (hourly) before sleeping
             - lambda: 'reterminal::maybe_snapshot();'
-            - deep_sleep.enter: deep_sleep_1
+            - deep_sleep.enter:
+                id: deep_sleep_1
+                sleep_duration: !lambda 'return (uint32_t) reterminal::refresh_interval_min * 60000;'
+      # Held awake past the refresh interval: redraw so the clocks stay
+      # current (never reached in normal wake-sleep cycles)
+      - if:
+          condition:
+            lambda: 'return reterminal::redraw_due();'
+          then:
+            - component.update: epaper_display
 
 script:
   - id: zones_changed
@@ -87,7 +96,7 @@ script:
               id(zone3_en).state ? id(zone_3).state.c_str() : "",
               id(zone4_en).state ? id(zone_4).state.c_str() : "",
               id(zone5_en).state ? id(zone_5).state.c_str() : "",
-              id(home_tz).state.c_str());
+              (int) id(home_zone_n).state);
           reterminal::bump_interact();
 
   - id: cols_changed
@@ -133,8 +142,12 @@ script:
               cols_t[k[3] - '1']->make_call().set_value(v).perform();
             } else if (k == "sync") {
               id(sync_interval).make_call().set_value(atoi(v.c_str())).perform();
+            } else if (k == "refresh") {
+              id(refresh_interval).make_call().set_value(atoi(v.c_str())).perform();
             } else if (k == "home") {
-              id(home_tz).make_call().set_value(v).perform();
+              id(home_zone_n).make_call().set_value(atoi(v.c_str())).perform();
+            } else if (k == "days") {
+              id(combo_days).make_call().set_value(atoi(v.c_str())).perform();
             } else if (k == "night") {
               int f, t;
               if (sscanf(v.c_str(), "%d-%d", &f, &t) == 2) {
@@ -224,6 +237,12 @@ script:
       - lambda: 'reterminal::prev_page();'
       - component.update: epaper_display
       - lambda: 'reterminal::bump_interact();'
+      # A flip onto a data page with nothing to show yet earns a refresh
+      - if:
+          condition:
+            lambda: 'return reterminal::page_data_empty(reterminal::page);'
+          then:
+            - script.execute: net_refresh
 
   - id: page_next
     mode: single
@@ -232,6 +251,12 @@ script:
       - lambda: 'reterminal::next_page();'
       - component.update: epaper_display
       - lambda: 'reterminal::bump_interact();'
+      # A flip onto a data page with nothing to show yet earns a refresh
+      - if:
+          condition:
+            lambda: 'return reterminal::page_data_empty(reterminal::page);'
+          then:
+            - script.execute: net_refresh
 
   # Green button: sync + fetch now. Also the recovery path when the radio
   # switch is off — wifi is enabled for this wake, the switch untouched.
@@ -498,6 +523,7 @@ display:
     # Redraws are triggered explicitly: once per wake and on page changes
     update_interval: never
     lambda: |-
+      reterminal::mark_draw();
       switch (reterminal::page) {
         case 0:
           reterminal::draw_world_clock(it, id(font_large), id(font_medium), id(font_small));
@@ -531,4 +557,5 @@ display:
         reterminal::draw_status_bar(it, id(font_small), id(battery_level).state,
                                     id(temp_sensor).state, id(hum_sensor).state,
                                     id(bar_climate).state, id(sd_card_detect).state,
-                                    id(bar_jalali).state);
+                                    id(bar_jalali).state,
+                                    id(sleep_pause).state || id(keep_awake).state);

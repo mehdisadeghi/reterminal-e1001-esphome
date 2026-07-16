@@ -160,14 +160,15 @@ microphone:
 
 # =============================================================================
 # [10] Deep sleep / 深度睡眠
-# Wakes every 5 min to refresh; any button wakes it immediately.
+# Wakes every Refresh Interval minutes; any button wakes it immediately.
 # =============================================================================
 
 # No run_duration: the watcher interval enters sleep a short grace after the
-# last activity, so work (fetch, redraw, presses) always finishes first
+# last activity, so work (fetch, redraw, presses) always finishes first.
+# No sleep_duration either: the watcher passes the Refresh Interval config
+# at enter time.
 deep_sleep:
   id: deep_sleep_1
-  sleep_duration: 5min
   esp32_ext1_wakeup:
     mode: ANY_LOW
     pins:

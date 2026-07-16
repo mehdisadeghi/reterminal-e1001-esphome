@@ -59,6 +59,10 @@ esphome:
                                 ::time(nullptr) < reterminal::MIN_VALID_EPOCH;
           if (id(sync_interval).state >= 1)
             reterminal::sync_interval_min = (int) id(sync_interval).state;
+          if (id(refresh_interval).state >= 1)
+            reterminal::refresh_interval_min = (int) id(refresh_interval).state;
+          if (id(combo_days).state >= 1)
+            reterminal::week_days = (int) id(combo_days).state;
           if (id(night_from_n).state >= 0 && id(night_from_n).state <= 23)
             reterminal::night_from = (int) id(night_from_n).state;
           if (id(night_to_n).state >= 0 && id(night_to_n).state <= 23)
@@ -79,7 +83,7 @@ esphome:
               id(zone3_en).state ? id(zone_3).state.c_str() : "",
               id(zone4_en).state ? id(zone_4).state.c_str() : "",
               id(zone5_en).state ? id(zone_5).state.c_str() : "",
-              id(home_tz).state.c_str());
+              (int) id(home_zone_n).state);
           reterminal::rebuild_columns(id(col_1).state.c_str(), id(col_2).state.c_str(),
                                       id(col_3).state.c_str());
           bool cold = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED;
