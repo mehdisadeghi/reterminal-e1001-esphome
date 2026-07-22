@@ -564,36 +564,49 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
   // Two-row layouts let the rows overlap vertically: a bottom dial rises
   // into the top row's horizontal gap, so the binding constraint is the
   // circle distance sqrt(d^2 + dy^2) >= 2R + MINSP between neighbouring
-  // columns, not stacked row blocks. Top-row captions go above the dials,
-  // bottom-row below, keeping text out of the interleave zone. dy_out is
-  // the solved distance between the two rows' centers.
+  // columns, not stacked row blocks. Top-row captions stay UNDER their
+  // dials when they fit the corridor between the rising bottom dials
+  // (measured widths vs d - R); only when too wide do they move above —
+  // and cost a second caption band in the vertical span. dy_out is the
+  // solved distance between the two rows' centers.
   int dy = 0;
-  auto solve_r = [&](int cap, int &dy_out) {
+  bool caps_above = false;
+  auto solve_single = [&](int cap) {
+    int r = (avail - GAP - cap) / 2;
+    return std::min(r, (W - (zone_count + 1) * MINSP) / (2 * zone_count));
+  };
+  auto solve_rows = [&](int cap, int bands, int &dy_out) {
     dy_out = 0;
-    if (rows == 1) {
-      int r = (avail - GAP - cap) / 2;
-      return std::min(r, (W - (zone_count + 1) * MINSP) / (2 * zone_count));
-    }
     for (int r = avail / 2; r >= 20; r--) {
       int d = (W - 2 * r) / (zone_count - 1);
       if (d <= 0)
         continue;
       long need = 2L * r + MINSP;
-      long dd = (long) d * d;
-      long dy2 = need * need - dd;
+      long dy2 = need * need - (long) d * d;
       int v = dy2 > 0 ? (int) ceilf(sqrtf((float) dy2)) : 0;
-      if (2 * r + v + 2 * (GAP + cap) <= avail) {
+      if (2 * r + v + bands * (GAP + cap) <= avail) {
         dy_out = v;
         return r;
       }
     }
     return 20;
   };
+  auto top_caption_w = [&](int role) {
+    int w = 0;
+    for (int i = 0; i < r1; i++) {
+      const char *nm = lang::zone_name(zones[i]);
+      int bx, by, bw, bh;
+      it.get_text_bounds(0, 0, nm, label_font(role, nm), TextAlign::TOP_LEFT, &bx, &by, &bw,
+                         &bh);
+      w = std::max(w, bw);
+    }
+    return w;
+  };
 
   int cap_role, CAP, R;
   if (labels_inside) {
     CAP = 0;
-    R = solve_r(0, dy);
+    R = rows == 1 ? solve_single(0) : solve_rows(0, 0, dy);
     cap_role = R >= 150 ? F_LARGE : (R >= 110 ? F_MEDIUM : F_SMALL);
   } else {
     static const int ROLES[3] = {F_LARGE, F_MEDIUM, F_SMALL};
@@ -604,7 +617,18 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
     for (int tier = 0; tier < 3; tier++) {
       cap_role = ROLES[tier];
       CAP = measure_cap(cap_role);
-      R = solve_r(CAP, dy);
+      if (rows == 1) {
+        R = solve_single(CAP);
+        dy = 0;
+      } else {
+        caps_above = false;
+        R = solve_rows(CAP, 1, dy);  // below-first: no top caption band
+        int d = (W - 2 * R) / (zone_count - 1);
+        if (top_caption_w(cap_role) / 2 > d - R - MINSP / 2) {
+          caps_above = true;  // too wide for the corridor: move above
+          R = solve_rows(CAP, 2, dy);
+        }
+      }
       if (R >= RMIN[tier])
         break;
     }
@@ -629,13 +653,13 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
     }
   }
   // vertical placement: single row centers its block; two rows center the
-  // overlapped span (top captions above, bottom captions below)
+  // overlapped span (a top caption band exists only in caps_above mode)
   int cy_row[2];
   if (rows == 1) {
     cy_row[0] = TOP + (avail - (2 * R + GAP + CAP)) / 2 + R;
   } else {
-    int span = 2 * R + dy + 2 * (GAP + CAP);
-    cy_row[0] = TOP + (avail - span) / 2 + CAP + GAP + R;
+    int span = 2 * R + dy + (caps_above ? 2 : 1) * (GAP + CAP);
+    cy_row[0] = TOP + (avail - span) / 2 + (caps_above ? CAP + GAP : 0) + R;
     cy_row[1] = cy_row[0] + dy;
   }
   bool has_home = home_zone >= 0 && home_zone < zone_count;
@@ -699,9 +723,9 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
         it.print(cx, ly, cap_f, fg, TextAlign::TOP_CENTER, label);
       }
     } else {
-      // two-row layouts: top-row captions sit above their dials, clear of
-      // the interleave zone the bottom dials rise into
-      bool above = rows == 2 && row == 0;
+      // top-row captions go above only when the engine had to move them
+      // (corridor between the rising bottom dials too narrow)
+      bool above = rows == 2 && row == 0 && caps_above;
       int ly = above ? cy - R - GAP - CAP + 4 : cy + R + GAP;
       if (is_local) {
         int bx, by, bw, bh;
