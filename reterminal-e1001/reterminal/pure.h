@@ -133,8 +133,9 @@ static std::vector<TzEntry> tz_ovr;
 // explicitly. All DST rules are "week'th day-of-week of month at local hour".
 struct Zone {
   char city[16];
-  int std_min;  // standard offset from UTC, minutes
-  int dst_min;  // == std_min when the zone has no DST
+  char iana[40];  // IANA name the spec resolved from; "" for manual specs
+  int std_min;    // standard offset from UTC, minutes
+  int dst_min;    // == std_min when the zone has no DST
   int start_month, start_week, start_dow, start_hour;  // DST begins
   int end_month, end_week, end_dow, end_hour;          // DST ends (dow 0 = Sunday)
 };
@@ -144,7 +145,7 @@ struct Zone {
 constexpr int MAX_ZONES = 5;
 static Zone zones[MAX_ZONES];
 static int zone_count = 0;
-static int home_zone = 0;  // highlighted and the base for displayed offsets
+static int home_zone = -1;  // highlighted, base for offsets; -1 = none
 
 // Analog-page night window, from the HA Night From/To numbers.
 static int night_from = 18, night_to = 6;
@@ -302,6 +303,7 @@ inline bool zone_from_posix(const char *label, const char *posix, Zone &z) {
 //   "City|std_min"                      fixed offset, minutes east of UTC
 //   "City|std_min|dst_min|m.w/h|m.w/h"  manual DST rules (Sundays, week 5 = last)
 inline bool parse_zone(const char *s, Zone &z) {
+  z.iana[0] = 0;  // only the IANA forms below fill it
   if (strchr(s, '|') == nullptr) {
     const char *eq = strchr(s, '=');
     const char *name = eq ? eq + 1 : s;
@@ -318,7 +320,10 @@ inline bool parse_zone(const char *s, Zone &z) {
     } else {
       tz_label(name, label, sizeof(label));
     }
-    return zone_from_posix(label, posix, z);
+    if (!zone_from_posix(label, posix, z))
+      return false;
+    snprintf(z.iana, sizeof(z.iana), "%s", name);
+    return true;
   }
   char buf[64];
   snprintf(buf, sizeof(buf), "%s", s);
@@ -361,19 +366,23 @@ inline bool parse_zone(const char *s, Zone &z) {
   return true;
 }
 
-// Empty specs are skipped, invalid ones logged and skipped; home is the
-// 1-based slot index and falls back to the first zone.
+// Empty specs are skipped, invalid ones logged and skipped. home_tz is an
+// IANA name matched case-insensitively against the zones' resolved IANA
+// names — "Europe/Berlin" highlights a "Potsdam=Europe/Berlin" zone; the
+// first match wins. Empty or unmatched = no home zone (nothing inverted,
+// offsets shown vs. UTC). Manual offset specs carry no IANA name.
 inline void rebuild_zones(const char *z1, const char *z2, const char *z3, const char *z4,
-                          const char *z5, int home_slot) {
+                          const char *z5, const char *home_tz) {
   const char *in[MAX_ZONES] = {z1, z2, z3, z4, z5};
   zone_count = 0;
-  home_zone = 0;
+  home_zone = -1;
   for (int i = 0; i < MAX_ZONES; i++) {
     if (in[i] == nullptr || in[i][0] == 0)
       continue;
     Zone z;
     if (parse_zone(in[i], z)) {
-      if (i == home_slot - 1)
+      if (home_zone < 0 && home_tz != nullptr && home_tz[0] != 0 && z.iana[0] != 0 &&
+          strcasecmp(z.iana, home_tz) == 0)
         home_zone = zone_count;
       zones[zone_count++] = z;
     } else {

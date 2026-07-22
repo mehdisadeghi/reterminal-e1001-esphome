@@ -146,13 +146,11 @@ def main():
     if doc.get("version") != 1:
         err("version: must be 1")
 
-    zone_count = 0
     if "zones" in doc:
         zones = doc["zones"]
         if not isinstance(zones, list) or not 1 <= len(zones) <= MAX_ZONES:
             err(f"zones: array of 1..{MAX_ZONES} required")
         else:
-            zone_count = len(zones)
             for i, z in enumerate(zones):
                 check_zone(z, i, tztable)
 
@@ -166,10 +164,14 @@ def main():
 
     if "home_zone" in doc:
         hz = doc["home_zone"]
-        if not isinstance(hz, int) or not 1 <= hz <= MAX_ZONES:
-            err(f"home_zone: 1-based zone slot integer 1..{MAX_ZONES} required")
-        elif zone_count and hz > zone_count:
-            warn(f"home_zone {hz} > {zone_count} zones; the device falls back to the first zone")
+        if not isinstance(hz, str):
+            err('home_zone: IANA zone name string required ("" = none)')
+        elif hz:
+            tzs = [z.get("tz") for z in doc.get("zones", [])
+                   if isinstance(z, dict) and z.get("tz")]
+            if tzs and hz.lower() not in [t.lower() for t in tzs]:
+                warn(f"home_zone '{hz}' resolves to none of the zones' tz names; "
+                     "the device treats it as none")
 
     for key, lo, hi in (("night_from", 0, 23), ("night_to", 0, 23),
                         ("sync_interval_min", 1, 1440), ("refresh_interval_min", 1, 1440),
@@ -189,11 +191,11 @@ def main():
                 isinstance(b, bool) for b in spv):
             err(f"show_pages: array of exactly {PAGES} booleans required")
 
-    if "bar_pages" in doc:
-        bp = doc["bar_pages"]
+    if "bar_skip_pages" in doc:
+        bp = doc["bar_skip_pages"]
         if not isinstance(bp, str) or (bp and not all(
                 len(t) == 1 and "1" <= t <= "8" for t in bp.split(","))):
-            err("bar_pages: comma-separated page numbers 1..8 required, e.g. \"2,3,4,5\"")
+            err("bar_skip_pages: comma-separated page numbers 1..8 required, e.g. \"7,8\"")
 
     if "ha_url" in doc and not str(doc["ha_url"]).startswith("http"):
         err("ha_url: must start with http")
@@ -211,7 +213,7 @@ def main():
 
     known = {"version", "set_time", "home_zone", "zones", "columns", "ha_url", "ha_token",
              "sync_interval_min", "refresh_interval_min", "combo_days", "start_page",
-             "night_from", "night_to", "show_pages", "bar_pages"}
+             "night_from", "night_to", "show_pages", "bar_skip_pages"}
     for key in doc:
         if key not in known:
             warn(f"unknown key '{key}' (ignored by the device)")

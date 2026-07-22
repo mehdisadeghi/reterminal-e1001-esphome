@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "pure.h"
+#include "hijri.h"
 #include "jalali.h"
 
 static int fails = 0;
@@ -32,6 +33,27 @@ static void test_jalali() {
   CHECK(jy == 1405 && jm == 4 && jd == 24);  // 24 Tir 1405
   jalali::from_gregorian(2026, 3, 21, jy, jm, jd);
   CHECK(jy == 1405 && jm == 1 && jd == 1);  // Nowruz
+}
+
+static void test_home_zone() {
+  rebuild_zones("Asia/Tehran", "Europe/Berlin", "", "", "", "");
+  CHECK(zone_count == 2 && home_zone == -1);  // empty = no home zone
+  rebuild_zones("Asia/Tehran", "Potsdam=Europe/Berlin", "", "", "", "europe/berlin");
+  CHECK(home_zone == 1);  // matched by IANA name, not by label
+  rebuild_zones("Asia/Tehran", "Europe/Berlin", "", "", "", "Berlin");
+  CHECK(home_zone == -1);  // labels are not tz names
+  rebuild_zones("City|60", "Europe/Berlin", "", "", "", "City");
+  CHECK(home_zone == -1);  // manual specs carry no IANA name
+}
+
+static void test_hijri() {
+  int hy, hm, hd;
+  hijri::from_gregorian(622, 7, 19, hy, hm, hd);
+  CHECK(hy == 1 && hm == 1 && hd == 1);  // civil epoch (proleptic Gregorian)
+  hijri::from_gregorian(2000, 1, 1, hy, hm, hd);
+  CHECK(hy == 1420 && hm == 9 && hd == 24);  // 24 Ramadan 1420 (tabular)
+  hijri::from_gregorian(2026, 7, 22, hy, hm, hd);
+  CHECK(hy == 1448 && hm == 2 && hd == 6);  // 6 Safar 1448 (tabular)
 }
 
 static void test_zone_specs() {
@@ -103,6 +125,8 @@ static void test_night() {
 int main() {
   test_calendar();
   test_jalali();
+  test_hijri();
+  test_home_zone();
   test_zone_specs();
   test_dst_offsets();
   test_columns();

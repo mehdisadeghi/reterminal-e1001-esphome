@@ -1,13 +1,17 @@
 HOST ?= homeassistant
 USER ?= $(shell id -un)
 TARGET_DIR ?= /config/esphome
-DEVICE ?= reterminal-e1001.local
 
-YAML = esphome-reterminal-e1001.yaml
-NAME = reterminal-e1001
+# Per-device: each unit has its own esphome-<device>.yaml whose device_name
+# substitution matches <device>; shared packages/code/assets live in
+# reterminal-e1001/. Builds land in .esphome/build/<device>/, so devices
+# never clobber each other: make release DEVICE=reterminal-e1002
+DEVICE ?= reterminal-e1001
+
+YAML = esphome-$(DEVICE).yaml
 FILES = $(YAML)
 DIRS = reterminal-e1001
-BIN = .esphome/build/$(NAME)/.pioenvs/$(NAME)/firmware.bin
+BIN = .esphome/build/$(DEVICE)/.pioenvs/$(DEVICE)/firmware.bin
 
 .PHONY: build deploy release test
 

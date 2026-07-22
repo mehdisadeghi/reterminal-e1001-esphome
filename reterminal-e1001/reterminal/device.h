@@ -91,19 +91,20 @@ static time_t pre_rtc_time = 0;   // system time captured before the RTC read
 static bool force_sync = false;  // green button: sync + fetch now
 static int sync_interval_min = 15;
 static bool page_enabled_[PAGE_COUNT] = {true, true, true, true, true, true, true, true};
-static bool bar_on_[PAGE_COUNT] = {false, true, true, true, true, false, false, false};
+static bool bar_on_[PAGE_COUNT] = {true, true, true, true, true, true, true, true};
 
-// "2,3,4,5" = show the status bar on pages 2..5 (1-based, comma-separated)
-inline void set_bar_pages(const char *s) {
+// The status bar shows on every page except the listed ones; "7,8" =
+// hidden on pages 7 and 8 (1-based, comma-separated, empty = everywhere)
+inline void set_bar_skip(const char *s) {
   for (int i = 0; i < PAGE_COUNT; i++)
-    bar_on_[i] = false;
+    bar_on_[i] = true;
   while (*s) {
     const char *e = strchr(s, ',');
     size_t len = e ? (size_t) (e - s) : strlen(s);
     if (len == 1 && s[0] >= '1' && s[0] < '1' + PAGE_COUNT)
-      bar_on_[s[0] - '1'] = true;
+      bar_on_[s[0] - '1'] = false;
     else if (len)
-      ESP_LOGW(TAG, "bar pages: bad token '%.*s'", (int) len, s);
+      ESP_LOGW(TAG, "bar skip: bad token '%.*s'", (int) len, s);
     s += len + (e ? 1 : 0);
   }
 }
@@ -161,24 +162,44 @@ inline bool fetch_due() {
   return ha_fetch_at == 0 || now - ha_fetch_at > FETCH_INTERVAL;
 }
 
-// page indices match the display lambda: 1 numbers, 2-4 graphs
-inline bool page_needs_live(int p) { return p == 1 && any_ha_col(); }
-inline bool page_needs_history(int p) { return p >= 2 && p <= 4 && any_ha_col(); }
+// page indices match the display lambda: 2 numbers, 3-5 graphs
+inline bool page_needs_live(int p) { return p == 2 && any_ha_col(); }
+inline bool page_needs_history(int p) { return p >= 3 && p <= 5 && any_ha_col(); }
 
-inline bool network_needed() {
-  return sync_due() || page_needs_live(page) || (page_needs_history(page) && fetch_due());
+// True when no enabled HA column holds a single valid point — dev columns
+// refill themselves per wake and don't count.
+inline bool ha_series_empty(const int16_t rows[MAX_COLS][2][POINTS]) {
+  bool any = false;
+  for (int c = 0; c < MAX_COLS; c++) {
+    if (!cols[c].enabled || cols[c].is_dev)
+      continue;
+    any = true;
+    for (int m = 0; m < 2; m++)
+      for (int i = 0; i < POINTS; i++)
+        if (rows[c][m][i] != PT_NAN)
+          return false;
+  }
+  return any;
 }
 
-// A button flip onto a data page with missing or stale HA values earns a
-// refresh. Dev columns have their own per-wake sampling and never trigger it.
+// A data page showing missing or stale HA values earns a refresh — on
+// button flips and on wakes alike (a rolled-empty window would otherwise
+// stay blank until the 3 h fetch interval expires).
 inline bool page_data_empty(int p) {
-  if (p == 1) {
+  if (p == 2) {
     time_t now = ::time(nullptr);
     return page_needs_live(p) && (ha_live_at == 0 || now - ha_live_at > 600);
   }
-  if (p >= 2 && p <= 4)
-    return page_needs_history(p) && ha_fetch_at == 0;
+  if (p == 3 || p == 4)
+    return page_needs_history(p) && (ha_fetch_at == 0 || ha_series_empty(series_day));
+  if (p == 5)
+    return page_needs_history(p) && (ha_fetch_at == 0 || ha_series_empty(series_week));
   return false;
+}
+
+inline bool network_needed() {
+  return sync_due() || page_needs_live(page) ||
+         (page_needs_history(page) && (fetch_due() || page_data_empty(page)));
 }
 
 // --- Window rolling & device sampling ----------------------------------------
@@ -835,8 +856,8 @@ inline std::string sd_process() {
   }
 
   char kv[64];
-  if (doc["home_zone"].is<int>()) {
-    snprintf(kv, sizeof(kv), "home=%d", (int) doc["home_zone"]);
+  if (doc["home_zone"].is<const char *>()) {
+    snprintf(kv, sizeof(kv), "home=%s", (const char *) doc["home_zone"]);
     add(kv);
   }
   if (doc["night_from"].is<int>() && doc["night_to"].is<int>()) {
@@ -866,8 +887,8 @@ inline std::string sd_process() {
       add(kv);
     }
   }
-  if (doc["bar_pages"].is<const char *>()) {
-    snprintf(kv, sizeof(kv), "bar=%s", (const char *) doc["bar_pages"]);
+  if (doc["bar_skip_pages"].is<const char *>()) {
+    snprintf(kv, sizeof(kv), "barskip=%s", (const char *) doc["bar_skip_pages"]);
     add(kv);
   }
 

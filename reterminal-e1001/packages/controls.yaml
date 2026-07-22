@@ -68,22 +68,41 @@ text:
       then:
         - script.execute: zones_changed
 
-  # Pages showing the bottom status bar, comma-separated 1-based page
-  # numbers (e.g. "2,3,4,5")
+  # The status bar shows on every page except these, comma-separated
+  # 1-based page numbers (e.g. "7,8"; empty = everywhere)
   - platform: template
-    name: "Status Bar Pages"
-    id: bar_pages
+    name: "Status Bar Excluded"
+    id: bar_skip
     optimistic: true
     restore_value: true
-    initial_value: "2,3,4,5"
+    initial_value: ""
     max_length: 15
     mode: text
     entity_category: config
     on_value:
       then:
         - lambda: |-
-            reterminal::set_bar_pages(x.c_str());
+            reterminal::set_bar_skip(x.c_str());
             reterminal::bump_interact();
+            if (millis() > 8000)
+              id(epaper_display).update();
+
+  # IANA name of the home timezone: the first zone resolving to it gets
+  # the inverted row/caption and becomes the offset base ("Europe/Berlin"
+  # also highlights a "Potsdam=Europe/Berlin" zone). Empty or unmatched =
+  # no home zone — nothing inverted, offsets vs. UTC.
+  - platform: template
+    name: "Home Zone"
+    id: home_zone_t
+    optimistic: true
+    restore_value: true
+    initial_value: "Europe/Berlin"
+    max_length: 40
+    mode: text
+    entity_category: config
+    on_value:
+      then:
+        - script.execute: zones_changed
 
   # Climate columns (numbers page + graph lines), sources as data:
   #   "Label=dev"                          onboard SHT4x, sampled locally
@@ -106,7 +125,7 @@ text:
     id: col_2
     optimistic: true
     restore_value: true
-    initial_value: "Indoor=sensor.indoor_temperature,sensor.indoor_humidity"
+    initial_value: ""
     max_length: 160
     mode: text
     entity_category: config
@@ -118,7 +137,7 @@ text:
     id: col_3
     optimistic: true
     restore_value: true
-    initial_value: "Outdoor=sensor.outdoor_temperature,sensor.outdoor_humidity"
+    initial_value: ""
     max_length: 160
     mode: text
     entity_category: config
@@ -153,24 +172,6 @@ text:
         - lambda: 'reterminal::bump_interact();'
 
 number:
-  # 1-based zone slot shown as home: inverted row/caption and the base for
-  # the displayed offsets. An empty or invalid slot falls back to the first
-  # zone.
-  - platform: template
-    name: "Home Zone"
-    id: home_zone_n
-    optimistic: true
-    restore_value: true
-    initial_value: 2
-    min_value: 1
-    max_value: 5
-    step: 1
-    mode: box
-    entity_category: config
-    on_value:
-      then:
-        - script.execute: zones_changed
-
   # Days covered by the combined temp/hum page (7 = one week). Changing it
   # resets the window and forces a refetch on the next wake that shows it.
   - platform: template
@@ -199,7 +200,7 @@ number:
   # Minutes between display refreshes: the deep-sleep wake cadence, and the
   # redraw cadence while the device is held awake.
   - platform: template
-    name: "Refresh Interval"
+    name: "Display Refresh Interval"
     id: refresh_interval
     optimistic: true
     restore_value: true
@@ -295,6 +296,7 @@ button:
   # One short beep, immediately (works only while the device is awake)
   - platform: template
     name: "Beep"
+    entity_category: config
     on_press:
       - script.execute: beep_short
       - lambda: 'reterminal::bump_interact();'
@@ -303,23 +305,27 @@ button:
   # "Page ..." prefix keeps them adjacent in HA's alphabetical Controls list
   - platform: template
     name: "Page Next"
+    entity_category: config
     on_press:
       - script.execute: page_next
   - platform: template
     name: "Page Previous"
+    entity_category: config
     on_press:
       - script.execute: page_prev
   - platform: template
     name: "Fetch History"
+    entity_category: config
     on_press:
       - script.execute: do_fetch
 
 switch:
   # Pause deep sleep while tinkering. RAM only (ALWAYS_OFF): any reset or
-  # power cycle re-enables deep sleep. The HA-queued
-  # input_boolean.reterminal_keep_awake serves the same purpose while asleep.
+  # power cycle re-enables deep sleep. The HA-queued keep-awake helper
+  # (input_boolean.<helper_prefix>_keep_awake) serves the same purpose
+  # while asleep.
   - platform: template
-    name: "Pause Deep Sleep"
+    name: "Pause Sleep (while awake)"
     id: sleep_pause
     optimistic: true
     restore_mode: ALWAYS_OFF
@@ -332,7 +338,7 @@ switch:
   # Per-page visibility: navigation, auto-cycle, and start page skip pages
   # whose switch is off. With everything off, page 1 shows as fallback.
   - platform: template
-    name: "Show 1 World Clock"
+    name: "Show 1 Analog Clocks"
     id: show_page1
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
@@ -348,7 +354,7 @@ switch:
             reterminal::next_page();
           reterminal::bump_interact();
   - platform: template
-    name: "Show 2 Climate"
+    name: "Show 2 World Clock"
     id: show_page2
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
@@ -364,7 +370,7 @@ switch:
             reterminal::next_page();
           reterminal::bump_interact();
   - platform: template
-    name: "Show 3 Temperature 24h"
+    name: "Show 3 Climate"
     id: show_page3
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
@@ -380,7 +386,7 @@ switch:
             reterminal::next_page();
           reterminal::bump_interact();
   - platform: template
-    name: "Show 4 Humidity 24h"
+    name: "Show 4 Temperature 24h"
     id: show_page4
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
@@ -396,7 +402,7 @@ switch:
             reterminal::next_page();
           reterminal::bump_interact();
   - platform: template
-    name: "Show 5 Weekly History"
+    name: "Show 5 Humidity 24h"
     id: show_page5
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
@@ -412,7 +418,7 @@ switch:
             reterminal::next_page();
           reterminal::bump_interact();
   - platform: template
-    name: "Show 6 Analog Clocks"
+    name: "Show 6 Combo History"
     id: show_page6
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
@@ -540,9 +546,69 @@ switch:
     restore_mode: RESTORE_DEFAULT_ON
     entity_category: config
     on_turn_on:
-      - lambda: 'reterminal::bump_interact();'
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
     on_turn_off:
-      - lambda: 'reterminal::bump_interact();'
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+
+  # Time offsets in the analog clock captions (vs. home zone, or UTC)
+  - platform: template
+    name: "Analog Clock Offsets"
+    id: analog_offsets
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+    on_turn_off:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+
+  # Lunar Hijri date in the status bar (tabular calendar, ±1 day)
+  - platform: template
+    name: "Status Bar Lunar Hijri"
+    id: bar_hijri
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+    on_turn_off:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+
+  # 1 px battery gauge across the very top of every page, no labels
+  - platform: template
+    name: "Battery Bar"
+    id: batt_bar
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+    on_turn_off:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
 
   # Device temp/hum in the status bar ("T 25° H 48")
   - platform: template
@@ -552,16 +618,24 @@ switch:
     restore_mode: RESTORE_DEFAULT_ON
     entity_category: config
     on_turn_on:
-      - lambda: 'reterminal::bump_interact();'
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
     on_turn_off:
-      - lambda: 'reterminal::bump_interact();'
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
 
   # Advance one page per timer wake; toggleable from HA, survives deep sleep
+  # (entity_category keeps it off HA's auto-generated Overview)
   - platform: template
     name: "Page Auto-Cycle"
     id: auto_cycle
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
     on_turn_on:
       - lambda: 'reterminal::bump_interact();'
     on_turn_off:

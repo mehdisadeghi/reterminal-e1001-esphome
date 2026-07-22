@@ -6,6 +6,7 @@
 #include "esp_system.h"
 #include "device.h"
 #include "khayyam_fa.h"
+#include "hijri.h"
 #include "jalali.h"
 #include "pure.h"
 
@@ -19,25 +20,25 @@ using esphome::display::TextAlign;
 
 // Small sun (day) / crescent moon (night) glyph; bg carves the crescent so
 // it works on normal and inverted rows alike.
+inline void thick_line(Display &it, int x1, int y1, int x2, int y2, int w, esphome::Color color);
+
 inline void draw_day_night(Display &it, int cx, int cy, bool night, esphome::Color fg,
                            esphome::Color bg) {
   if (night) {
-    it.filled_circle(cx, cy, 9, fg);
-    it.filled_circle(cx + 5, cy - 3, 8, bg);
+    it.filled_circle(cx, cy, 10, fg);
+    it.filled_circle(cx + 6, cy - 4, 8, bg);
   } else {
-    it.filled_circle(cx, cy, 5, fg);
+    it.filled_circle(cx, cy, 6, fg);
     for (int k = 0; k < 8; k++) {
       float a = k * 3.14159265f / 4.0f;
-      it.line(cx + (int) (cosf(a) * 7.0f), cy + (int) (sinf(a) * 7.0f),
-              cx + (int) (cosf(a) * 11.0f), cy + (int) (sinf(a) * 11.0f), fg);
+      thick_line(it, cx + (int) (cosf(a) * 9.0f), cy + (int) (sinf(a) * 9.0f),
+                 cx + (int) (cosf(a) * 13.0f), cy + (int) (sinf(a) * 13.0f), 2, fg);
     }
   }
 }
 
-inline void draw_world_clock(Display &it, BaseFont *big, BaseFont *med, BaseFont *small_f) {
+inline void draw_world_clock(Display &it, BaseFont *time_f, BaseFont *med, BaseFont *small_f) {
   time_t now = ::time(nullptr);
-  it.print(400, 12, med, TextAlign::TOP_CENTER, "World Clock");
-  it.line(20, 55, 780, 55);
   if (now < MIN_VALID_EPOCH) {
     it.print(400, 220, med, TextAlign::CENTER, "Waiting for time sync...");
     return;
@@ -46,8 +47,11 @@ inline void draw_world_clock(Display &it, BaseFont *big, BaseFont *med, BaseFont
     it.print(400, 220, med, TextAlign::CENTER, "No zones configured");
     return;
   }
-  int base_off = zone_offset_min(zones[home_zone], now);
-  int y = 75 + (MAX_ZONES - zone_count) * 40;  // vertically centered
+  bool has_home = home_zone >= 0 && home_zone < zone_count;
+  // without a home zone nothing is inverted and offsets are vs. UTC
+  int base_off = has_home ? zone_offset_min(zones[home_zone], now) : 0;
+  const int RH = 76;
+  int y = 58 + (MAX_ZONES - zone_count) * (RH / 2);  // vertically centered
   for (int zi = 0; zi < zone_count; zi++) {
     const Zone &z = zones[zi];
     int off = zone_offset_min(z, now);
@@ -59,20 +63,24 @@ inline void draw_world_clock(Display &it, BaseFont *big, BaseFont *med, BaseFont
     strftime(date, sizeof(date), "%a %d %b", &lt);
     bool is_local = zi == home_zone;
     auto fg = is_local ? esphome::display::COLOR_OFF : esphome::display::COLOR_ON;
+    int cy = y + RH / 2;
     if (is_local)
-      it.filled_rectangle(0, y - 10, 800, 66);
-    it.print(40, y, big, fg, TextAlign::TOP_LEFT, z.city);
+      it.filled_rectangle(0, y, 800, RH);
+    it.print(40, cy, med, fg, TextAlign::CENTER_LEFT, z.city);
     if (!is_local) {
       int rel = off - base_off;
       int a = rel < 0 ? -rel : rel;
-      it.printf(430, y + 24, small_f, fg, TextAlign::TOP_RIGHT, "%c%d:%02d",
+      it.printf(430, cy + 4, small_f, fg, TextAlign::CENTER_RIGHT, "%c%d:%02d",
                 rel < 0 ? '-' : '+', a / 60, a % 60);
     }
-    it.print(580, y + 24, small_f, fg, TextAlign::TOP_RIGHT, date);
-    it.print(725, y, big, fg, TextAlign::TOP_RIGHT, hhmm);
-    draw_day_night(it, 762, y + 26, is_night(lt.tm_hour), fg,
+    it.print(580, cy + 4, small_f, fg, TextAlign::CENTER_RIGHT, date);
+    it.print(726, cy, time_f, fg, TextAlign::CENTER_RIGHT, hhmm);
+    draw_day_night(it, 762, cy, is_night(lt.tm_hour), fg,
                    is_local ? esphome::display::COLOR_ON : esphome::display::COLOR_OFF);
-    y += 80;
+    // hairline between plain rows; the inverted band is its own separator
+    if (zi < zone_count - 1 && !is_local && zi + 1 != home_zone)
+      it.line(40, y + RH, 760, y + RH);
+    y += RH;
   }
 }
 
@@ -98,12 +106,12 @@ inline void draw_awake_icon(Display &it, int x, int y) {
   it.line(x + 3, y + 16, x + 7, y + 16, c);
 }
 
-// Bottom status bar, inverted, drawn on every page. Left: Solar Hijri date;
+// Bottom status bar, inverted. Left: Solar Hijri and/or Lunar Hijri date;
 // center: Gregorian date; right, growing leftwards: battery, awake bulb,
 // SD-card icon, RTC warning, device climate.
 inline void draw_status_bar(Display &it, BaseFont *small_f, float battery_pct, float dev_t,
                             float dev_h, bool show_climate, bool sd_present, bool show_jalali,
-                            bool awake_hold) {
+                            bool show_lunar, bool awake_hold) {
   it.filled_rectangle(0, 446, 800, 34);
   time_t now = ::time(nullptr);
   if (now > MIN_VALID_EPOCH) {
@@ -111,11 +119,22 @@ inline void draw_status_bar(Display &it, BaseFont *small_f, float battery_pct, f
     localtime_r(&now, &lt);
     char greg[24];
     strftime(greg, sizeof(greg), "%a %d %b %Y", &lt);
+    int lx = 20;
     if (show_jalali) {
       int jy, jm, jd;
       jalali::from_gregorian(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, jy, jm, jd);
-      it.printf(20, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_LEFT,
-                "%d %s %d", jd, jalali::MONTHS[jm - 1], jy);
+      char buf[28];
+      snprintf(buf, sizeof(buf), "%d %s %d", jd, jalali::MONTHS[jm - 1], jy);
+      it.print(lx, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_LEFT, buf);
+      int bx, by, bw, bh;
+      it.get_text_bounds(lx, 463, buf, small_f, TextAlign::CENTER_LEFT, &bx, &by, &bw, &bh);
+      lx += bw + 24;
+    }
+    if (show_lunar) {
+      int hy, hm, hd;
+      hijri::from_gregorian(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, hy, hm, hd);
+      it.printf(lx, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER_LEFT,
+                "%d %s %d", hd, hijri::MONTHS[hm - 1], hy);
     }
     it.print(400, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER, greg);
   }
@@ -162,24 +181,37 @@ inline void draw_numbers(Display &it, BaseFont *huge, BaseFont *large, BaseFont 
     int x = CX[n - 1][k];
     float t = last_val[en[k]][M_TEMP], h = last_val[en[k]][M_HUM];
     it.print(x, 40, med, TextAlign::TOP_CENTER, c.label);
-    if (std::isnan(t))
+    // the value is the information, the unit a caption on its shoulder
+    char buf[16];
+    int bx, by, bw, bh;
+    if (std::isnan(t)) {
       it.print(x, 140, large, TextAlign::TOP_CENTER, "--");
-    else
-      it.printf(x, 130, huge, TextAlign::TOP_CENTER, "%.1f°C", t);
-    if (std::isnan(h))
+    } else {
+      snprintf(buf, sizeof(buf), "%.1f", t);
+      it.print(x, 110, huge, TextAlign::TOP_CENTER, buf);
+      it.get_text_bounds(x, 110, buf, huge, TextAlign::TOP_CENTER, &bx, &by, &bw, &bh);
+      it.print(bx + bw + 6, 122, small_f, TextAlign::TOP_LEFT, "°C");
+    }
+    if (std::isnan(h)) {
       it.print(x, 290, large, TextAlign::TOP_CENTER, "--");
-    else
-      it.printf(x, 280, huge, TextAlign::TOP_CENTER, "%.0f%%", h);
+    } else {
+      snprintf(buf, sizeof(buf), "%.0f", h);
+      it.print(x, 270, huge, TextAlign::TOP_CENTER, buf);
+      it.get_text_bounds(x, 270, buf, huge, TextAlign::TOP_CENTER, &bx, &by, &bw, &bh);
+      it.print(bx + bw + 6, 282, small_f, TextAlign::TOP_LEFT, "%");
+    }
   }
 }
 
 // Series distinction on a 1-bit panel, papers-style: line weight + dash
 // pattern + a distinct point marker per series (circle / square / triangle).
+// Tight gaps (one or two segments ≈ 4-7 px): the patterns stay tellable
+// apart while the curves read as continuous lines.
 inline bool style_skip(int style, int i) {
   if (style == 1)
-    return (i % 4) >= 2;
+    return (i % 4) == 3;  // long dash: 3 on, 1 off
   if (style == 2)
-    return (i % 6) >= 2;
+    return (i % 6) >= 4;  // short dash: 4 on, 2 off
   return false;
 }
 
@@ -414,22 +446,27 @@ inline void thick_line(Display &it, int x1, int y1, int x2, int y2, int w,
 }
 
 // Five analog world clocks, layout adapts to the zone count.
-inline void draw_analog_clocks(Display &it, BaseFont *med, BaseFont *small_f) {
+inline void draw_analog_clocks(Display &it, BaseFont *med, BaseFont *small_f,
+                               bool show_offsets) {
   time_t now = ::time(nullptr);
   if (now < MIN_VALID_EPOCH) {
     it.print(400, 220, med, TextAlign::CENTER, "Waiting for time sync...");
     return;
   }
   constexpr float PI_F = 3.14159265f;
-  // dial positions per zone count (1..5)
+  // Dial positions per zone count (1..5), full-size dials throughout.
+  // Two-row layouts interleave: the bottom row sits in the top row's gaps.
+  // 5 clocks: C.C.C over .C.C.; 4 clocks is the same minus the top-right
+  // dial, keeping the interlocked cluster. Captions in the 16 px utility
+  // face buy the 8-12 px bezel margins the panel edge needs.
   static const struct {
     int cx, cy;
   } LAYOUTS[MAX_ZONES][MAX_ZONES] = {
       {{400, 220}},
       {{266, 220}, {533, 220}},
       {{133, 220}, {400, 220}, {667, 220}},
-      {{266, 124}, {533, 124}, {266, 318}, {533, 318}},
-      {{133, 124}, {400, 124}, {667, 124}, {266, 318}, {533, 318}},
+      {{108, 104}, {400, 104}, {254, 323}, {546, 323}},
+      {{108, 104}, {400, 104}, {692, 104}, {254, 323}, {546, 323}},
   };
   const int R = 96;
   if (zone_count == 0) {
@@ -437,7 +474,8 @@ inline void draw_analog_clocks(Display &it, BaseFont *med, BaseFont *small_f) {
     return;
   }
   const auto *pos = LAYOUTS[zone_count - 1];
-  int base_off = zone_offset_min(zones[home_zone], now);
+  bool has_home = home_zone >= 0 && home_zone < zone_count;
+  int base_off = has_home ? zone_offset_min(zones[home_zone], now) : 0;
   for (int i = 0; i < zone_count; i++) {
     const Zone &z = zones[i];
     int off = zone_offset_min(z, now);
@@ -461,26 +499,26 @@ inline void draw_analog_clocks(Display &it, BaseFont *med, BaseFont *small_f) {
       int inner = quarter ? R - 20 : R - 12;
       thick_line(it, cx + (int) (sinf(a) * inner), cy - (int) (cosf(a) * inner),
                  cx + (int) (sinf(a) * (R - 4)), cy - (int) (cosf(a) * (R - 4)),
-                 quarter ? 5 : 3, fg);
+                 quarter ? 5 : 2, fg);
     }
     float ah = ((lt.tm_hour % 12) + lt.tm_min / 60.0f) * PI_F / 6.0f;
     float am = lt.tm_min * PI_F / 30.0f;
     thick_line(it, cx, cy, cx + (int) (sinf(ah) * R * 0.52f), cy - (int) (cosf(ah) * R * 0.52f),
-               7, fg);
+               6, fg);
     thick_line(it, cx, cy, cx + (int) (sinf(am) * R * 0.85f), cy - (int) (cosf(am) * R * 0.85f),
-               5, fg);
-    it.filled_circle(cx, cy, 6, fg);
+               4, fg);
+    it.filled_circle(cx, cy, 5, fg);
     // the local zone is marked by an inverted caption instead of its dial
     char label[32];
-    if (is_local) {
-      snprintf(label, sizeof(label), "%s", z.city);
-    } else {
-      int rel = off - base_off;
+    if (show_offsets && !is_local) {
+      int rel = off - base_off;  // vs. home, or vs. UTC with no home
       int a2 = rel < 0 ? -rel : rel;
       snprintf(label, sizeof(label), "%s %c%d:%02d", z.city, rel < 0 ? '-' : '+', a2 / 60,
                a2 % 60);
+    } else {
+      snprintf(label, sizeof(label), "%s", z.city);
     }
-    int ly = cy + R + 10;
+    int ly = cy + R + (zone_count >= 4 ? 4 : 10);
     if (is_local) {
       int bx, by, bw, bh;
       it.get_text_bounds(cx, ly, label, small_f, TextAlign::TOP_CENTER, &bx, &by, &bw, &bh);

@@ -89,6 +89,7 @@ sensor:
   - platform: adc
     pin: GPIO1
     name: "Battery Voltage"
+    entity_category: diagnostic
     id: battery_voltage
     update_interval: 60s
     attenuation: 12db
@@ -100,6 +101,7 @@ sensor:
   # --- Battery level (percentage) ---
   - platform: template
     name: "Battery Level"
+    entity_category: diagnostic
     id: battery_level
     unit_of_measurement: "%"
     icon: "mdi:battery"
@@ -128,6 +130,7 @@ sensor:
 light:
   - platform: binary
     name: "Onboard LED"
+    entity_category: config
     output: bsp_led
     id: onboard_led
     on_turn_on:
@@ -140,6 +143,7 @@ light:
   - platform: monochromatic
     output: buzzer_pwm
     name: "Buzzer"
+    entity_category: config
     id: buzzer
     default_transition_length: 0s
     on_turn_on:

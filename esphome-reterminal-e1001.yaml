@@ -1,6 +1,11 @@
 substitutions:
   device_name: reterminal-e1001
   friendly_name: "reTerminal_E1001"
+  # entity-id-safe prefix (no dashes) of this device's three HA helpers;
+  # each device needs its own helper set (see ha-helpers.yaml)
+  helper_prefix: reterminal_e1001
+  # fallback hotspot name; defaults to the device name
+  ap_ssid: ${device_name}
   ha_http_ip: !secret ha_http_ip
   ha_api_token: !secret ha_api_token
 
@@ -84,14 +89,14 @@ esphome:
             pe[5] = id(show_page6).state;
             pe[6] = id(show_page7).state;
             pe[7] = id(show_page8).state;
-            reterminal::set_bar_pages(id(bar_pages).state.c_str());
+            reterminal::set_bar_skip(id(bar_skip).state.c_str());
             reterminal::rebuild_zones(
                 id(zone1_en).state ? id(zone_1).state.c_str() : "",
                 id(zone2_en).state ? id(zone_2).state.c_str() : "",
                 id(zone3_en).state ? id(zone_3).state.c_str() : "",
                 id(zone4_en).state ? id(zone_4).state.c_str() : "",
                 id(zone5_en).state ? id(zone_5).state.c_str() : "",
-                (int) id(home_zone_n).state);
+                id(home_zone_t).state.c_str());
             reterminal::rebuild_columns(id(col_1).state.c_str(), id(col_2).state.c_str(),
                                         id(col_3).state.c_str());
             bool cold = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_UNDEFINED;

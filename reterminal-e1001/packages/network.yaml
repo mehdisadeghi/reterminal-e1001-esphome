@@ -2,13 +2,13 @@
 
 text_sensor:
   # "Press" queue: create an HA Button helper named "Press" with entity id
-  # input_button.reterminal_press. Its state is the timestamp of its last
+  # input_button.${helper_prefix}_press. Its state is the timestamp of its last
   # press, so pressing it while the device sleeps is queued (any number of
   # presses collapse into the latest timestamp) and delivered on the next
   # wake — one beep signals "awake now, ready to interact".
   - platform: homeassistant
     id: beep_request
-    entity_id: input_button.reterminal_press
+    entity_id: input_button.${helper_prefix}_press
     on_value:
       then:
         - lambda: |-
@@ -29,7 +29,7 @@ text_sensor:
             }
 
   # HA-queued config channel: create a Text helper with entity id
-  # input_text.reterminal_config. Write semicolon-separated changes, e.g.
+  # input_text.${helper_prefix}_config. Write semicolon-separated changes, e.g.
   #   zone3=Asia/Dubai;show7=off;night=19-7;col1=Device=dev
   # Keys: zone1..zone5 (spec or empty), col1..col3 (spec or empty), home,
   # night=F-T, start=N, sync=MIN, cycle/showN=on|off. Applied on wake (or
@@ -38,7 +38,7 @@ text_sensor:
   # actions" in the ESPHome integration settings.
   - platform: homeassistant
     id: config_queue
-    entity_id: input_text.reterminal_config
+    entity_id: input_text.${helper_prefix}_config
     on_value:
       then:
         - if:
@@ -51,7 +51,7 @@ text_sensor:
               - homeassistant.action:
                   action: input_text.set_value
                   data:
-                    entity_id: input_text.reterminal_config
+                    entity_id: input_text.${helper_prefix}_config
                     value: ""
               - script.execute: beep_short
 
@@ -98,11 +98,15 @@ ota:
         - lambda: 'reterminal::rollback_arm();'
 
 # Wi-Fi settings / Wi-Fi 设置
+# No compiled-in credentials: the WLAN is provisioned at runtime with
+# ESPHome's own machinery and persists in NVS across reboots and OTAs —
+# via the fallback hotspot's captive portal, or over USB with Improv
+# (the device builder's "Set up Wi-Fi credentials" menu).
 wifi:
-  ssid: "your-ssid"
-  password: !secret wifi_password
   ap:
-    ssid: "reTerminal-E1001"
-    password: "ChangeMe123"
+    ssid: "${ap_ssid}"
+    password: !secret ap_password
 
 captive_portal:
+
+improv_serial:
