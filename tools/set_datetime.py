@@ -6,8 +6,12 @@ right before moving the card to the device. The offset (seconds, default 60)
 pre-compensates the handling delay between stamping and the device reading
 the card; the clock lands within that margin.
 
-    python3 set_datetime.py [config.json] [seconds_ahead]
+    uv run tools/set_datetime.py [config.json] [seconds_ahead]
 """
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 
 import json
 import sys

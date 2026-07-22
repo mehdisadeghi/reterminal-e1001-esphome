@@ -10,8 +10,12 @@ browser. ssh (one master, one passphrase) is only used to read the HA
 token from the deployed secrets and to look up the builder's ingress path.
 
 Usage: release.py <ssh destination> <builder slug or "auto"> <yaml>
-Run via `make release` (uv supplies esphome-dashboard-api).
+Run via `make release`.
 """
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["aiohttp", "esphome-dashboard-api"]
+# ///
 
 import asyncio
 import json

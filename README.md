@@ -35,17 +35,17 @@ exists.
 | `reterminal-e1001/reterminal/tzdata.h` | Embedded IANA → POSIX-rule table (generated) |
 | `tests/host_test.cpp` | Host-side unit tests for `pure.h` (see header for the one-liner) |
 | `reterminal-e1001/*.ttf`, `fa_*_glyphs.yaml` | Persian fonts + generated glyph lists |
-| `gen_fa_assets.py` | Pre-shapes the Khayyam corpus into `reterminal/khayyam_fa.h` + `fa_*_glyphs.yaml` |
+| `tools/gen_fa_assets.py` | Pre-shapes the Khayyam corpus into `reterminal/khayyam_fa.h` + `fa_*_glyphs.yaml` |
 | `reterminal-e1001/partitions.csv` | 32 MB flash: 2×3 MB OTA apps + 24 MB `hist` partition |
 | `tzdata.csv` | Same tz data as a file — the SD-card override source |
-| `gen_tzdata.py` | Regenerates both from upstream tzdata (`uv run --with tzdata python3 gen_tzdata.py`) |
-| `validate_config.py` | Host-side `config.json` validator — mirrors the firmware's acceptance rules, cross-checks IANA names against `tzdata.csv` |
-| `set_datetime.py` | Stamps a fresh one-shot `set_time` into `config.json` for air-gapped clock setting |
+| `tools/gen_tzdata.py` | Regenerates both from upstream tzdata (`uv run tools/gen_tzdata.py`) |
+| `tools/validate_config.py` | Host-side `config.json` validator — mirrors the firmware's acceptance rules, cross-checks IANA names against `tzdata.csv` |
+| `tools/set_datetime.py` | Stamps a fresh one-shot `set_time` into `config.json` for air-gapped clock setting |
 | `ha-helpers.yaml` | HA package creating the three queued-control helpers (Press, Keep Awake, Config Queue) |
 | `sd-config-design.md` | Air-gapped SD-card configuration & firmware update: design + implementation notes |
 | `config.json.example` | Template for the SD `config.json` |
 | `Makefile` | `build` / `deploy` / `release` / `test` (see below) |
-| `release.py` | Drives the Device Builder's compile + OTA through HA's ingress proxy |
+| `tools/release.py` | Drives the Device Builder's compile + OTA through HA's ingress proxy |
 
 Only the main YAML and the `reterminal-e1001/` directory go to the
 ESPHome builder folder (`make deploy`); everything project-specific lives

@@ -119,20 +119,23 @@ newest wins) and restored on cold boot — graphs survive power loss and
 reflashing. A future SD export (`history.csv`) can reuse the same data for
 offline analysis.
 
-## Tooling (in this repo, host-side, stdlib Python)
+## Tooling (`tools/`, host-side)
 
-- `gen_tzdata.py` — extracts current POSIX rules per IANA zone from upstream
+Each script declares its dependencies inline (PEP 723), so `uv run`
+resolves them automatically — no flags, no venv.
+
+- `tools/gen_tzdata.py` — extracts current POSIX rules per IANA zone from upstream
   tzdata into `tzdata.csv` (the data file; copy to the card to override) and
   `tzdata.h` (the embedded fallback). Run after a tzdata release:
-  `uv run --with tzdata python3 gen_tzdata.py`, reflash or update the card.
-- `validate_config.py` — validates a `config.json` against the same rules
+  `uv run tools/gen_tzdata.py`, reflash or update the card.
+- `tools/validate_config.py` — validates a `config.json` against the same rules
   the firmware enforces (schema, zone/column specs, ranges, IANA names and
   their rule forms via `tzdata.csv`, the 8 KB size cap). No ERROR output =
   the device will accept the file; run it before every card trip:
-  `python3 validate_config.py config.json`.
-- `set_datetime.py` — writes a fresh `set_time` (now + N seconds, default
+  `uv run tools/validate_config.py config.json`.
+- `tools/set_datetime.py` — writes a fresh `set_time` (now + N seconds, default
   60, compensating card-handling delay) into `config.json`:
-  `python3 set_datetime.py config.json 90`. Run right before moving the
+  `uv run tools/set_datetime.py config.json 90`. Run right before moving the
   card; the firmware applies each distinct value exactly once.
 
 The air-gapped workflow: edit `config.json` → `set_datetime.py` (if the

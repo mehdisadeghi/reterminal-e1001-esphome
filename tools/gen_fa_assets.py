@@ -3,9 +3,7 @@
 
 Shaping (contextual forms, lam-alef) and RTL ordering happen here at build
 time, so the firmware just prints the resulting presentation-form strings.
-
-    uv run --with arabic-reshaper --with python-bidi --with fonttools \
-        --with pyyaml python3 gen_fa_assets.py [khayyam_fa.yaml]
+Run from the repo root: `uv run tools/gen_fa_assets.py [khayyam_fa.yaml]`.
 
 Outputs:
     reterminal/khayyam_fa.h  shaped quatrains + title (visual order, UTF-8)
@@ -15,6 +13,10 @@ Outputs:
 Every emitted character is verified against the fonts' cmaps; missing
 glyphs fail the build loudly.
 """
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["arabic-reshaper", "python-bidi", "fonttools", "pyyaml"]
+# ///
 
 import sys
 

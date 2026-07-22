@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Extract current POSIX TZ rules from the system tzdata.
 
-Writes tzdata.csv (the data file; an SD-card copy is planned to override
-the embedded table) and tzdata.h (the embedded fallback, generated from
-the same rows). Re-run after a tzdata update and reflash.
+Writes tzdata.csv (the data file; an SD-card copy overrides the embedded
+table) and tzdata.h (the embedded fallback, generated from the same
+rows). Run from the repo root: `uv run tools/gen_tzdata.py`. Re-run
+after a tzdata update and reflash.
 """
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["tzdata"]
+# ///
 
 import os
 

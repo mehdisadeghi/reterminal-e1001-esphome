@@ -5,11 +5,15 @@ Mirrors the firmware's validation (reterminal_epaper.h): a file that passes
 with no ERROR lines is accepted by the device; any ERROR means the device
 would reject the whole file (one long beep, nothing applied).
 
-    python3 validate_config.py [config.json] [tzdata.csv]
+    uv run tools/validate_config.py [config.json] [tzdata.csv]
 
-tzdata.csv defaults to the copy next to this script and is used to
+tzdata.csv defaults to the copy in the repo root and is used to
 cross-check IANA zone names and their rule forms.
 """
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 
 import json
 import os
@@ -123,7 +127,7 @@ def check_column(c, i):
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "config.json"
     tzpath = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "tzdata.csv")
+        os.path.dirname(os.path.abspath(__file__)), "..", "tzdata.csv")
 
     raw = open(path, "rb").read()
     if len(raw) > MAX_FILE:

@@ -35,10 +35,10 @@ deploy:
 # step (green button or keep-awake); the upload retries while it sleeps.
 BUILDER ?= auto
 release: deploy
-	uv run --with esphome-dashboard-api python3 release.py $(USER)@$(HOST) $(BUILDER) $(YAML)
+	uv run tools/release.py $(USER)@$(HOST) $(BUILDER) $(YAML)
 
 # Host-side checks: pure-logic unit tests + example config validation
 test:
 	c++ -std=c++17 -DRETERMINAL_HOST_TEST -I reterminal-e1001/reterminal tests/host_test.cpp -o /tmp/rt_test
 	/tmp/rt_test
-	python3 validate_config.py config.json.example
+	uv run tools/validate_config.py config.json.example
