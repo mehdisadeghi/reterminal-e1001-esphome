@@ -8,6 +8,7 @@
   "sync_interval_min": 15,
   "refresh_interval_min": 3,
   "combo_days": 7,
+  "lang": "en",
   "ha_url": "http://homeassistant.local:8123",
   "ha_token": "REPLACE_WITH_LONG_LIVED_TOKEN",
   "show_pages": [true, true, true, true, true, true, true, true],

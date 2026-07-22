@@ -1,0 +1,24 @@
+# Persian UI strings (logical order, unshaped — the generator shapes them).
+# Latin stays where Persian usage keeps it: URLs, °C, RTC!, runtime labels.
+strings:
+  TITLE_CLOCK: "ساعت جهانی"
+  WAIT_SYNC: "در انتظار همگام‌سازی زمان..."
+  NO_ZONES: "هیچ منطقه‌ای پیکربندی نشده"
+  NO_COLS: "هیچ ستونی پیکربندی نشده"
+  TITLE_TEMP: "دما - ۲۴ ساعت"
+  TITLE_HUM: "رطوبت - ۲۴ ساعت"
+  WIFI_TITLE: "راه‌اندازی وای‌فای"
+  WIFI_JOIN: "به این هات‌اسپات وصل شوید:"
+  OPEN_URL: "سپس http://192.168.4.1 را باز کنید"
+
+# tm_wday order: Sunday first
+weekdays: [یکشنبه, دوشنبه, سه‌شنبه, چهارشنبه, پنجشنبه, جمعه, شنبه]
+
+months_gregorian: [ژانویه, فوریه, مارس, آوریل, مه, ژوئن,
+                   ژوئیه, اوت, سپتامبر, اکتبر, نوامبر, دسامبر]
+
+months_jalali: [فروردین, اردیبهشت, خرداد, تیر, مرداد, شهریور,
+                مهر, آبان, آذر, دی, بهمن, اسفند]
+
+months_hijri: [محرم, صفر, ربیع‌الاول, ربیع‌الثانی, جمادی‌الاول, جمادی‌الثانی,
+               رجب, شعبان, رمضان, شوال, ذیقعده, ذیحجه]

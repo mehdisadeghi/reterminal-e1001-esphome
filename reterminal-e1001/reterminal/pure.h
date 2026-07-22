@@ -21,6 +21,7 @@
 #define RT_LOGI ESP_LOGI
 #endif
 
+#include "arabic_shape.h"
 #include "tzdata.h"
 
 namespace reterminal {
@@ -131,9 +132,15 @@ static std::vector<TzEntry> tz_ovr;
 // Newlib's POSIX TZ handling on the ESP32 is unreliable (per-row setenv/tzset
 // rendered every zone in the system timezone), so offsets are computed
 // explicitly. All DST rules are "week'th day-of-week of month at local hour".
+constexpr int ZONE_LANGS = 2;  // must match lang.h's PACKS order
+static const char *const ZONE_LANG_CODES[ZONE_LANGS] = {"en", "fa"};
+
 struct Zone {
-  char city[16];
-  char iana[40];  // IANA name the spec resolved from; "" for manual specs
+  char labels[ZONE_LANGS][40];  // display label per language, shaped if Arabic
+  char iana[40];              // IANA name the spec resolved from; "" if manual
+  bool custom[ZONE_LANGS];    // slot holds a user-chosen label: a plain label
+                              // sets every slot, "fa:..." only its own — the
+                              // rest stay mapping-eligible (derived baseline)
   int std_min;    // standard offset from UTC, minutes
   int dst_min;    // == std_min when the zone has no DST
   int start_month, start_week, start_dow, start_hour;  // DST begins
@@ -267,14 +274,13 @@ inline bool parse_tz_rule(const char *&p, int &month, int &week, int &dow, int &
 }
 
 // TZif footer form, e.g. "CET-1CEST,M3.5.0,M10.5.0/3" or "<+0330>-3:30".
-inline bool zone_from_posix(const char *label, const char *posix, Zone &z) {
+inline bool zone_from_posix(const char *posix, Zone &z) {
   const char *p = posix;
   skip_tz_name(p);
   int std_min;
   if (!parse_tz_offset(p, std_min))
     return false;
   memset(&z, 0, sizeof(z));
-  snprintf(z.city, sizeof(z.city), "%s", label);
   z.std_min = std_min;
   z.dst_min = std_min;
   if (*p == 0)
@@ -297,20 +303,74 @@ inline bool zone_from_posix(const char *label, const char *posix, Zone &z) {
   return true;
 }
 
+// Store one label into one language slot, shaping Arabic-script text into
+// presentation forms (visual order) so it renders without a text engine.
+inline void store_label(Zone &z, int li, const char *text) {
+  bool arabic = false;
+  for (const char *p = text; *p != 0; p++)
+    if ((uint8_t) *p >= 0x80)
+      arabic = true;
+  if (arabic)
+    shape_arabic(text, z.labels[li], sizeof(z.labels[li]));
+  else
+    snprintf(z.labels[li], sizeof(z.labels[li]), "%s", text);
+}
+
+// Label spec. A plain label is "a specific string at all": it fills every
+// slot and marks them custom. The per-language form ("en:Potsdam,fa:...")
+// binds each label to its own language only — unnamed slots keep whatever
+// baseline the caller stored (derived tz label) and stay eligible for the
+// city-name mapping. Over-long labels truncate, never invalidate the zone.
+inline void store_labels(Zone &z, const char *spec) {
+  bool perlang = false;
+  for (int li = 0; li < ZONE_LANGS && !perlang; li++) {
+    char pat[8];
+    snprintf(pat, sizeof(pat), "%s:", ZONE_LANG_CODES[li]);
+    if (strncmp(spec, pat, strlen(pat)) == 0 || strstr(spec, pat) != nullptr)
+      perlang = true;
+  }
+  if (!perlang) {
+    for (int li = 0; li < ZONE_LANGS; li++) {
+      store_label(z, li, spec);
+      z.custom[li] = true;
+    }
+    return;
+  }
+  char buf[96];
+  snprintf(buf, sizeof(buf), "%s", spec);
+  char *tok = buf;
+  for (char *p = buf;; p++) {
+    if (*p != ',' && *p != 0)
+      continue;
+    bool end = *p == 0;
+    *p = 0;
+    for (int li = 0; li < ZONE_LANGS; li++) {
+      size_t cl = strlen(ZONE_LANG_CODES[li]);
+      if (strncmp(tok, ZONE_LANG_CODES[li], cl) == 0 && tok[cl] == ':') {
+        store_label(z, li, tok + cl + 1);
+        z.custom[li] = true;
+      }
+    }
+    tok = p + 1;
+    if (end)
+      break;
+  }
+}
+
 // Zone spec forms:
 //   "Asia/Tehran"                       IANA name from the embedded table
 //   "Memphis=America/Chicago"           IANA name with a custom label
+//   "en:Potsdam,fa:...=Europe/Berlin"   per-language custom labels
 //   "City|std_min"                      fixed offset, minutes east of UTC
 //   "City|std_min|dst_min|m.w/h|m.w/h"  manual DST rules (Sundays, week 5 = last)
 inline bool parse_zone(const char *s, Zone &z) {
-  z.iana[0] = 0;  // only the IANA forms below fill it
   if (strchr(s, '|') == nullptr) {
     const char *eq = strchr(s, '=');
     const char *name = eq ? eq + 1 : s;
     const char *posix = tz_lookup(name);
     if (posix == nullptr)
       return false;
-    char label[16];
+    char label[96];
     if (eq) {
       size_t n = (size_t) (eq - s);
       if (n == 0 || n >= sizeof(label))
@@ -320,8 +380,16 @@ inline bool parse_zone(const char *s, Zone &z) {
     } else {
       tz_label(name, label, sizeof(label));
     }
-    if (!zone_from_posix(label, posix, z))
+    if (!zone_from_posix(posix, z))
       return false;
+    // after zone_from_posix (it rebuilds the struct): derived-label
+    // baseline in every slot, then any explicit labels over it
+    char derived[40];
+    tz_label(name, derived, sizeof(derived));
+    for (int li = 0; li < ZONE_LANGS; li++)
+      store_label(z, li, derived);
+    if (eq)
+      store_labels(z, label);
     snprintf(z.iana, sizeof(z.iana), "%s", name);
     return true;
   }
@@ -343,14 +411,25 @@ inline bool parse_zone(const char *s, Zone &z) {
   }
   if (n != 2 && n != 5)
     return false;
-  if (parts[0][0] == 0 || strlen(parts[0]) >= sizeof(z.city))
+  if (parts[0][0] == 0)
     return false;
   char *endp;
   long std_v = strtol(parts[1], &endp, 10);
   if (endp == parts[1] || *endp != 0 || std_v < -720 || std_v > 840)
     return false;
   memset(&z, 0, sizeof(z));
-  snprintf(z.city, sizeof(z.city), "%s", parts[0]);
+  store_labels(z, parts[0]);
+  // manual specs have no tz name to fall back to: unnamed slots borrow
+  // the first given label
+  const char *first = nullptr;
+  for (int li = 0; li < ZONE_LANGS && first == nullptr; li++)
+    if (z.custom[li])
+      first = z.labels[li];
+  for (int li = 0; li < ZONE_LANGS; li++)
+    if (!z.custom[li]) {
+      snprintf(z.labels[li], sizeof(z.labels[li]), "%s", first != nullptr ? first : "");
+      z.custom[li] = true;
+    }
   z.std_min = (int) std_v;
   z.dst_min = (int) std_v;
   if (n == 5) {
@@ -363,6 +442,7 @@ inline bool parse_zone(const char *s, Zone &z) {
       return false;
     z.dst_min = (int) dst_v;
   }
+  z.iana[0] = 0;  // manual specs carry no IANA name
   return true;
 }
 

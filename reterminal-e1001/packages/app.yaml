@@ -4,42 +4,9 @@
 # Fonts / 字体
 # =============================================================================
 
-# Explicit glyph set: the default covers ASCII only, we need the degree sign.
-# Type roles: Light (300) for display numerals — thin strokes render crisply
-# on the 1-bit panel and read calm at a distance; Medium (500) for labels;
-# Bold (700) only inside inverted bands, where thin strokes fill in.
+# UI fonts come from packages/fonts-en.yaml or fonts-fa.yaml (language
+# choice of the device yaml); the Persian corpus fonts below are shared.
 font:
-  # tiny: graph axis/tick labels and analog captions
-  - file: "gfonts://Inter@500"
-    id: font_tiny
-    size: 16
-    glyphs: &glyphs '!"%()+,-./0123456789:;=?ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz °'
-  - file: "gfonts://Inter@500"
-    id: font_small
-    size: 20
-    glyphs: *glyphs
-  - file: "gfonts://Inter@700"
-    id: font_smallb
-    size: 20
-    glyphs: *glyphs
-  - file: "gfonts://Inter@500"
-    id: font_medium
-    size: 32
-    glyphs: *glyphs
-  - file: "gfonts://Inter@300"
-    id: font_large
-    size: 48
-    glyphs: *glyphs
-  # digital world clock times
-  - file: "gfonts://Inter@300"
-    id: font_time
-    size: 56
-    glyphs: *glyphs
-  # climate numerals; units ride the shoulder in font_small
-  - file: "gfonts://Inter@300"
-    id: font_huge
-    size: 88
-    glyphs: *glyphs
   # Presentation forms of نقطه; printed in visual (RTL-reversed) order,
   # so no text shaping is needed
   - file: "reterminal-e1001/noqte.ttf"
@@ -155,6 +122,8 @@ script:
               zones_t[k[4] - '1']->make_call().set_value(v).perform();
             } else if (k.size() == 4 && k.rfind("col", 0) == 0 && k[3] >= '1' && k[3] <= '3') {
               cols_t[k[3] - '1']->make_call().set_value(v).perform();
+            } else if (k == "lang") {
+              id(ui_lang).make_call().set_option(v).perform();
             } else if (k == "barskip") {
               id(bar_skip).make_call().set_value(v).perform();
             } else if (k == "sync") {
@@ -568,35 +537,35 @@ display:
       // phones often skip the captive-portal popup (private DNS, https-only
       // probes), so the URL must be discoverable on the device itself
       if (!esphome::wifi::global_wifi_component->has_sta()) {
-        it.print(400, 170, id(font_large), TextAlign::CENTER, "Wi-Fi setup");
-        it.printf(400, 240, id(font_medium), TextAlign::CENTER,
-                  "Join hotspot \"%s\"", "${ap_ssid}");
-        it.print(400, 290, id(font_medium), TextAlign::CENTER,
-                 "then open http://192.168.4.1");
+        it.print(400, 140, reterminal::lfont(reterminal::F_LARGE), TextAlign::CENTER,
+                 lang::L().wifi_title);
+        it.print(400, 215, reterminal::lfont(reterminal::F_MEDIUM), TextAlign::CENTER,
+                 lang::L().wifi_join);
+        it.print(400, 265, reterminal::lfont(reterminal::F_MEDIUM), TextAlign::CENTER,
+                 "${ap_ssid}");
+        it.print(400, 330, reterminal::lfont(reterminal::F_SMALL), TextAlign::CENTER,
+                 lang::L().open_url);
         return;
       }
       switch (reterminal::page) {
         case 0:
-          reterminal::draw_analog_clocks(it, id(font_medium), id(font_tiny),
-                                         id(analog_offsets).state);
+          reterminal::draw_analog_clocks(it, id(analog_offsets).state,
+                                         id(analog_inside).state);
           break;
         case 1:
-          reterminal::draw_world_clock(it, id(font_time), id(font_medium), id(font_small));
+          reterminal::draw_world_clock(it);
           break;
         case 2:
-          reterminal::draw_numbers(it, id(font_huge), id(font_large), id(font_medium),
-                                   id(font_small));
+          reterminal::draw_numbers(it);
           break;
         case 3:
-          reterminal::draw_graph_page(it, reterminal::M_TEMP, "Temperature - 24h",
-                                      id(font_medium), id(font_small), id(font_tiny));
+          reterminal::draw_graph_page(it, reterminal::M_TEMP);
           break;
         case 4:
-          reterminal::draw_graph_page(it, reterminal::M_HUM, "Humidity - 24h",
-                                      id(font_medium), id(font_small), id(font_tiny));
+          reterminal::draw_graph_page(it, reterminal::M_HUM);
           break;
         case 5:
-          reterminal::draw_week_page(it, id(font_medium), id(font_smallb), id(font_tiny));
+          reterminal::draw_week_page(it);
           break;
         case 6:
           it.print(400, 240, id(font_noqte), TextAlign::CENTER, "ﻪﻄﻘﻧ");
@@ -606,7 +575,7 @@ display:
           break;
       }
       if (reterminal::bar_on_[reterminal::page])
-        reterminal::draw_status_bar(it, id(font_smallb), id(battery_level).state,
+        reterminal::draw_status_bar(it, id(battery_level).state,
                                     id(temp_sensor).state, id(hum_sensor).state,
                                     id(bar_climate).state, id(sd_card_detect).state,
                                     id(bar_jalali).state, id(bar_hijri).state,
@@ -618,5 +587,5 @@ display:
         int span = reterminal::bar_on_[reterminal::page] ? 442 : 476;
         int h = (int) (id(battery_level).state * span / 100.0f);
         if (h > 0)
-          it.filled_rectangle(796, 2 + span - h, 2, h);
+          it.filled_rectangle(lang::rtl() ? 2 : 796, 2 + span - h, 2, h);
       }

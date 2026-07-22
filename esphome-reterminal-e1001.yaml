@@ -13,6 +13,7 @@ packages:
   hardware: !include reterminal-e1001/packages/hardware.yaml
   network: !include reterminal-e1001/packages/network.yaml
   controls: !include reterminal-e1001/packages/controls.yaml
+  fonts: !include reterminal-e1001/packages/fonts.yaml
   app: !include reterminal-e1001/packages/app.yaml
 
 esphome:
@@ -57,6 +58,13 @@ esphome:
         # Mirror all HA config entities, flag a dead RTC, restore the history
         # snapshot and apply the start page on cold boot
         - lambda: |-
+            reterminal::register_fonts(0, id(font_tiny), id(font_small), id(font_smallb),
+                                       id(font_medium), id(font_large), id(font_time),
+                                       id(font_huge));
+            reterminal::register_fonts(1, id(fa_tiny), id(fa_small), id(fa_smallb),
+                                       id(fa_medium), id(fa_large), id(fa_time),
+                                       id(fa_huge));
+            reterminal::lang_apply(id(ui_lang).current_option().c_str());
             reterminal::radio_on = id(radio_sw).state;
             // A frozen chip (STOP set, dead cell) can report stale time as
             // valid and clobber the system clock that survives deep sleep on

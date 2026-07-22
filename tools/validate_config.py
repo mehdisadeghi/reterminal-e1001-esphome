@@ -43,6 +43,12 @@ def ascii_label(s):
     return isinstance(s, str) and 1 <= len(s) <= LABEL_MAX and all(32 <= ord(c) < 127 for c in s)
 
 
+def zone_label_ok(s):
+    # zone labels may be any script (shaped on device) and may carry the
+    # per-language form "en:...,fa:..."; the device truncates at 39 bytes
+    return isinstance(s, str) and 1 <= len(s.encode()) <= 48
+
+
 def derived_label(tz_name):
     return tz_name.rsplit("/", 1)[-1].replace("_", " ")
 
@@ -85,12 +91,12 @@ def check_zone(z, i, tztable):
         elif tztable and not POSIX.match(tztable[name.lower()]):
             err(f"{where}.tz: '{name}' uses a rule form the firmware cannot parse")
         label = z.get("label") or derived_label(name)
-        if not ascii_label(label):
-            err(f"{where}: label '{label}' must be 1..{LABEL_MAX} ASCII chars")
+        if not zone_label_ok(label):
+            err(f"{where}: label must be 1..48 bytes")
         return label
     city = z.get("city")
-    if not ascii_label(city or ""):
-        err(f"{where}.city: 1..{LABEL_MAX} ASCII chars required")
+    if not zone_label_ok(city or ""):
+        err(f"{where}.city: 1..48 bytes required")
     std = z.get("std_offset_min")
     if not isinstance(std, int) or not -720 <= std <= 840:
         err(f"{where}.std_offset_min: integer -720..840 required")
@@ -162,6 +168,9 @@ def main():
             for i, c in enumerate(colsv):
                 check_column(c, i)
 
+    if "lang" in doc and doc["lang"] not in ("en", "fa"):
+        err('lang: "en" or "fa" required')
+
     if "home_zone" in doc:
         hz = doc["home_zone"]
         if not isinstance(hz, str):
@@ -213,7 +222,7 @@ def main():
 
     known = {"version", "set_time", "home_zone", "zones", "columns", "ha_url", "ha_token",
              "sync_interval_min", "refresh_interval_min", "combo_days", "start_page",
-             "night_from", "night_to", "show_pages", "bar_skip_pages"}
+             "night_from", "night_to", "show_pages", "bar_skip_pages", "lang"}
     for key in doc:
         if key not in known:
             warn(f"unknown key '{key}' (ignored by the device)")

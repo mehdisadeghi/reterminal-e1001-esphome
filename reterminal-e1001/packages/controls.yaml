@@ -13,7 +13,7 @@ text:
     optimistic: true
     restore_value: true
     initial_value: "Asia/Tehran"
-    max_length: 48
+    max_length: 96
     mode: text
     entity_category: config
     on_value:
@@ -25,7 +25,7 @@ text:
     optimistic: true
     restore_value: true
     initial_value: "Europe/Berlin"
-    max_length: 48
+    max_length: 96
     mode: text
     entity_category: config
     on_value:
@@ -37,7 +37,7 @@ text:
     optimistic: true
     restore_value: true
     initial_value: "Memphis=America/Chicago"
-    max_length: 48
+    max_length: 96
     mode: text
     entity_category: config
     on_value:
@@ -49,7 +49,7 @@ text:
     optimistic: true
     restore_value: true
     initial_value: "America/Mexico_City"
-    max_length: 48
+    max_length: 96
     mode: text
     entity_category: config
     on_value:
@@ -61,7 +61,7 @@ text:
     optimistic: true
     restore_value: true
     initial_value: "America/Vancouver"
-    max_length: 48
+    max_length: 96
     mode: text
     entity_category: config
     on_value:
@@ -170,6 +170,24 @@ text:
     on_value:
       then:
         - lambda: 'reterminal::bump_interact();'
+
+select:
+  # Runtime UI language; direction and fonts follow (lang.h registry)
+  - platform: template
+    name: "Language"
+    id: ui_lang
+    optimistic: true
+    restore_value: true
+    initial_option: "en"
+    options: ["en", "fa"]
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::lang_apply(x.c_str());
+            reterminal::bump_interact();
+            if (millis() > 8000)
+              id(epaper_display).update();
 
 number:
   # Days covered by the combined temp/hum page (7 = one week). Changing it
@@ -560,6 +578,24 @@ switch:
   - platform: template
     name: "Analog Clock Offsets"
     id: analog_offsets
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+    on_turn_off:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+
+  # Zone labels inside the dial faces instead of below (bigger dials)
+  - platform: template
+    name: "Analog Labels Inside"
+    id: analog_inside
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
     entity_category: config

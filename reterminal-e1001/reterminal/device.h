@@ -876,6 +876,10 @@ inline std::string sd_process() {
     snprintf(kv, sizeof(kv), "refresh=%d", (int) doc["refresh_interval_min"]);
     add(kv);
   }
+  if (doc["lang"].is<const char *>()) {
+    snprintf(kv, sizeof(kv), "lang=%s", (const char *) doc["lang"]);
+    add(kv);
+  }
   if (doc["combo_days"].is<int>()) {
     snprintf(kv, sizeof(kv), "days=%d", (int) doc["combo_days"]);
     add(kv);
