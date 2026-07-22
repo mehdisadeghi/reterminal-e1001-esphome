@@ -239,7 +239,26 @@ hourly flash snapshots.
 - Nice-step graph auto-scaling; dashed lines by segment skipping; stroke
   thickness via perpendicular-offset line fans (`thick_line`).
 - Arabic presentation forms (U+FB50–FEFF) printed in visual order for
-  shaped Persian without HarfBuzz.
+  shaped Persian without HarfBuzz — pre-shaped at build time for UI
+  strings and CLDR city names, and shaped on device (contextual joining,
+  lam-alef, ZWNJ; table generated from arabic-reshaper's data) for
+  user-entered zone labels, once per config change.
+- **Analog layout engine** (`draw_analog_clocks`): dial-first. Counts map
+  to row shapes (1–3 one row, 4 = 2+2, 5 = 2+3). The radius is solved
+  from the real page — height above the status bar when that page shows
+  it, bezel margins, the battery hairline, and the *measured* pixel
+  height of every caption in the exact font that will render it. The
+  caption face then follows the dial: the largest of 48/32/20 px whose
+  resulting radius still clears that tier's threshold — never the
+  reverse. Two-row layouts interleave on N evenly spaced columns and
+  overlap vertically: the binding constraint is the circle distance
+  √(d² + dy²) ≥ 2R + 12 between neighbouring columns, with the row
+  offset dy solved jointly with R by scanning R downward; top-row
+  captions render above their dials and bottom-row below, keeping text
+  out of the interleave zone. Centers derive from the final radius with
+  equal gaps, so no side collects leftover whitespace. "Analog Labels
+  Inside" moves captions onto the faces and drops both caption bands
+  from the vertical span — the largest dials of all.
 
 ## Hardware used
 
