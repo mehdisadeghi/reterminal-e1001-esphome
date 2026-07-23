@@ -7,6 +7,7 @@
   "night_to": 6,
   "sync_interval_min": 15,
   "refresh_interval_min": 3,
+  "night_refresh_min": 0,
   "combo_days": 7,
   "lang": "en",
   "ha_url": "http://homeassistant.local:8123",

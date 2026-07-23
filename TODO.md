@@ -61,27 +61,39 @@
       firmware acceptance rules), set_datetime.py (one-shot set_time
       stamping); workflow documented in sd-config-design.md
 - [x] Day/night sun/moon glyphs on the digital world clock rows
+- [x] Persian stage 2: runtime language select (en/fa) with Pack registry
+      + per-language font sets; on-device reshaper (contextual forms,
+      lam-alef, ZWNJ) for user-entered labels; CLDR city names; localized
+      status bar (dates and climate readout); per-language zone labels
+      with precedence rules; RTL-mirrored analog layout
+- [x] Wi-Fi provisioning via captive portal + improv (no compiled
+      credentials; `ap_password` secret for the fallback hotspot);
+      three-strike backoff on failed wakes
+- [x] Photo dial faces: baked-in `<city>.png` set (`$(IMAGES)`) with SD
+      per-file override, runtime dither at the layout's radius, contrast
+      halos, night negatives; Dial Photos / Night Mode toggles
+- [x] PSRAM enabled (8 MB octal, S3R8)
+- [x] Firmware version stamping (`make gen-version` → `git describe` in
+      HA and on the debug page)
+- [x] Debug page (double green press); long green press = remote config
+- [x] Remote config from Config URL (daily or on demand, no SD needed)
+- [x] Night Refresh Interval (slower cadence inside the night window)
 
 ## Open
 
-- [ ] Persian support, stage 2: on-device reshaper (contextual forms,
-      lam-alef, ZWNJ) for arbitrary/SD-provided text and the Persian
-      status-bar date
-
+- [ ] Rollback drill: flash a deliberately crashing build and watch the
+      three-attempt auto-rollback restore the previous slot (the version
+      stamp on the debug page verifies it)
+- [ ] Measure real battery discharge (HA history slope) and validate the
+      generic calibration curve; revisit cadence defaults with data
 - [ ] Inside/outside temps reported identical — firmware mapping verified;
       needs `Got state` log lines from one wake (duplicate/stale Zigbee
       entity suspected)
-- [ ] Verify SD bus sharing on real hardware (Arduino SD lib and ESPHome's
-      SPI driver share the bus serialized in the loop; also confirm the SD
-      CS pin is GPIO14 per Seeed's schematic)
 - [ ] Eyeball all layouts on the real panel (tuned blind), incl. reduced
       zone counts and device-only pages
-- [ ] Persian status-bar date via reshaper + presentation-form glyphs
 - [ ] Decide fate of the single 24 h pages (Show switches can hide them
       meanwhile); remove the noqte test page when done evaluating
-- [ ] Fallback AP password is still `ChangeMe123`; strengthen or drop
-      `ap:`/`captive_portal:`
 - [ ] Check/insert the CR1220 RTC backup cell (RTC! warning / STOP flag)
-- [ ] Battery calibration curve is generic; validate against real
-      discharge behavior
 - [ ] Optional: sleep-proof remote navigation via a retained HA select
+- [ ] Optional: remote firmware update over HTTPS (esp_https_ota into the
+      passive slot, guarded by the existing rollback counter)

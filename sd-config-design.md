@@ -26,6 +26,7 @@ only partition-table changes still need USB.
 | `ha_url`, `ha_token` | string | HA REST endpoint |
 | `sync_interval_min` | int ≥1 | minutes between HA syncs |
 | `refresh_interval_min` | int ≥1 | display refresh cadence: deep-sleep wake interval and held-awake redraw interval |
+| `night_refresh_min` | int 0..1440 | refresh cadence while the home zone is inside the night window; 0 = no slowdown |
 | `combo_days` | int 1..31 | span of the combined temp/hum page (7 = one week) |
 | `start_page` | int ≥1 | page after cold boot |
 | `night_from`, `night_to` | int 0..23 | analog dial night-inversion hours |
