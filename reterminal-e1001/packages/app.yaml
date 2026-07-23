@@ -55,10 +55,19 @@ interval:
                   script.is_running: sd_check
           then:
             # Persist history to the flash partition (hourly) before sleeping
-            - lambda: 'reterminal::maybe_snapshot();'
+            - lambda: |-
+                reterminal::maybe_snapshot();
+                // wifi strike bookkeeping: a wake that tried and never
+                // connected counts; a connected wake clears the count
+                if (reterminal::radio_on && !reterminal::wifi_strikeout()) {
+                  if (esphome::wifi::global_wifi_component->is_connected())
+                    reterminal::wifi_fail_wakes = 0;
+                  else
+                    reterminal::wifi_fail_wakes++;
+                }
             - deep_sleep.enter:
                 id: deep_sleep_1
-                sleep_duration: !lambda 'return (uint32_t) reterminal::refresh_interval_min * 60000;'
+                sleep_duration: !lambda 'return (uint32_t) reterminal::sleep_minutes() * 60000;'
       # Held awake past the refresh interval: redraw so the clocks stay
       # current (never reached in normal wake-sleep cycles)
       - if:
@@ -130,6 +139,8 @@ script:
               id(sync_interval).make_call().set_value(atoi(v.c_str())).perform();
             } else if (k == "refresh") {
               id(refresh_interval).make_call().set_value(atoi(v.c_str())).perform();
+            } else if (k == "nrefresh") {
+              id(night_refresh).make_call().set_value(atoi(v.c_str())).perform();
             } else if (k == "home") {
               id(home_zone_t).make_call().set_value(v).perform();
             } else if (k == "days") {
@@ -227,11 +238,46 @@ script:
       - delay: 80ms
       - light.turn_off: buzzer
 
+  # Fetch config.json from Config URL — daily on a network wake, or a long
+  # green press. Same validate-then-apply path and beeps as the SD card.
+  - id: remote_config
+    mode: single
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return id(config_url).state.length() > 0;'
+          then:
+            - lambda: 'reterminal::fetch_remote_config(id(config_url).state.c_str());'
+            - if:
+                condition:
+                  lambda: 'return reterminal::sd_time_was_set;'
+                then:
+                  - pcf8563.write_time:
+                  - lambda: 'reterminal::sd_time_was_set = false;'
+            - if:
+                condition:
+                  lambda: 'return !reterminal::pending_changes.empty();'
+                then:
+                  - script.execute: apply_changes
+                  - script.execute: beep_ok
+            - if:
+                condition:
+                  lambda: 'return reterminal::sd_error;'
+                then:
+                  - script.execute: beep_err
+
   - id: page_prev
     mode: single
     then:
       - script.execute: beep_short
-      - lambda: 'reterminal::prev_page();'
+      # the debug overlay swallows the first flip: back to the page under it
+      - lambda: |-
+          if (reterminal::debug_page)
+            reterminal::debug_page = false;
+          else
+            reterminal::prev_page();
       - component.update: epaper_display
       - lambda: 'reterminal::bump_interact();'
       # A flip onto a data page with nothing to show yet earns a refresh
@@ -245,7 +291,12 @@ script:
     mode: single
     then:
       - script.execute: beep_short
-      - lambda: 'reterminal::next_page();'
+      # the debug overlay swallows the first flip: back to the page under it
+      - lambda: |-
+          if (reterminal::debug_page)
+            reterminal::debug_page = false;
+          else
+            reterminal::next_page();
       - component.update: epaper_display
       - lambda: 'reterminal::bump_interact();'
       # A flip onto a data page with nothing to show yet earns a refresh
@@ -332,6 +383,16 @@ script:
                                  reterminal::page_data_empty(reterminal::page)));
                 then:
                   - lambda: 'reterminal::fetch_history(id(ha_url).state.c_str(), id(ha_token).state.c_str());'
+      # Daily remote-config check rides whichever wake has the network up
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: |-
+                  return id(config_url).state.length() > 0 &&
+                         reterminal::remote_cfg_due();
+          then:
+            - script.execute: remote_config
       - component.update: epaper_display
       # A green press earns a 30 s interaction window; other wakes get the
       # short grace
@@ -448,13 +509,39 @@ binary_sensor:
     id: button_1
     name: "Button 1 (Green)"
     entity_category: diagnostic
-    on_press:
-      then:
-        - if:
-            condition:
-              lambda: 'return millis() > 2000;'
-            then:
-              - script.execute: do_fetch
+    # short = fetch (as before), double = debug page, long = remote config
+    on_multi_click:
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at least 0.4s
+        then:
+          - if:
+              condition:
+                lambda: 'return millis() > 2000;'
+              then:
+                - script.execute: do_fetch
+      - timing:
+          - ON for at most 0.5s
+          - OFF for at most 0.4s
+          - ON for at most 0.5s
+        then:
+          - if:
+              condition:
+                lambda: 'return millis() > 2000;'
+              then:
+                - script.execute: beep_short
+                - lambda: |-
+                    reterminal::debug_page = !reterminal::debug_page;
+                    reterminal::bump_interact();
+                - component.update: epaper_display
+      - timing:
+          - ON for at least 1s
+        then:
+          - if:
+              condition:
+                lambda: 'return millis() > 2000;'
+              then:
+                - script.execute: remote_config
 
   # Button 2 (right white) — next page
   - platform: gpio
@@ -546,6 +633,11 @@ display:
                  "${ap_ssid}");
         it.print(400, 330, reterminal::lfont(reterminal::F_SMALL), TextAlign::CENTER,
                  lang::L().open_url);
+        return;
+      }
+      if (reterminal::debug_page) {
+        reterminal::draw_debug(it, id(battery_voltage).state, id(battery_level).state,
+                               id(sd_card_detect).state, id(config_url).state.c_str());
         return;
       }
       switch (reterminal::page) {

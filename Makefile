@@ -13,7 +13,14 @@ FILES = $(YAML)
 DIRS = reterminal-e1001
 BIN = .esphome/build/$(DEVICE)/build/firmware.ota.bin
 
-.PHONY: build deploy release test gen-images
+.PHONY: build deploy release test gen-images gen-version
+
+# Stamp the build with git describe; ESPHOME_PROJECT_VERSION shows in HA
+# and on the device's debug page (double green press)
+gen-version:
+	printf 'esphome:\n  project:\n    name: "reterminal.dashboard"\n    version: "%s"\n' \
+	  "$$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
+	  > reterminal-e1001/version.yaml
 
 # Bake the <city>.png dial faces from $(IMAGES) into the firmware; build
 # and deploy depend on it so the embedded set always matches the files.
@@ -27,13 +34,13 @@ gen-images:
 # Pinned to the device builder's version; newer resolvers also reject the
 # bare Arduino library names in the yaml.
 ESPHOME_VERSION ?= 2026.7.0
-build: gen-images
+build: gen-images gen-version
 	uvx esphome@$(ESPHOME_VERSION) compile $(YAML)
 	@echo "copy $(BIN) to the card as /firmware.bin"
 
 # Copy the builder file set to the HA host (secrets.yaml stays untouched).
 # tar-over-ssh: the HA SSH add-on has no rsync, but BusyBox tar is there.
-deploy: gen-images
+deploy: gen-images gen-version
 	COPYFILE_DISABLE=1 tar cf - $(FILES) $(DIRS) | ssh $(USER)@$(HOST) "mkdir -p $(TARGET_DIR) && tar xvf - -C $(TARGET_DIR)"
 	@echo "deployed to $(USER)@$(HOST):$(TARGET_DIR) (files only; 'make release' compiles and flashes)"
 

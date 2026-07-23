@@ -87,6 +87,19 @@ text:
             if (millis() > 8000)
               id(epaper_display).update();
 
+  # config.json served over HTTP(S), checked daily on a network wake or on
+  # a long green press; same validate-then-apply path as the SD card.
+  # Empty = disabled.
+  - platform: template
+    name: "Config URL"
+    id: config_url
+    optimistic: true
+    restore_value: true
+    initial_value: ""
+    max_length: 200
+    mode: text
+    entity_category: config
+
   # IANA name of the home timezone: the first zone resolving to it gets
   # the inverted row/caption and becomes the offset base ("Europe/Berlin"
   # also highlights a "Potsdam=Europe/Berlin" zone). Empty or unmatched =
@@ -234,6 +247,27 @@ number:
         - lambda: |-
             if (x >= 1)
               reterminal::refresh_interval_min = (int) x;
+            reterminal::bump_interact();
+
+  # Refresh interval inside the night window (home zone local time);
+  # 0 disables the slowdown. People sleep — the display can too.
+  - platform: template
+    name: "Night Refresh Interval"
+    id: night_refresh
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 1440
+    step: 1
+    unit_of_measurement: "min"
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            if (x >= 0)
+              reterminal::night_refresh_min = (int) x;
             reterminal::bump_interact();
 
   # Minutes between HA syncs (API connect: time + queued helpers). Green

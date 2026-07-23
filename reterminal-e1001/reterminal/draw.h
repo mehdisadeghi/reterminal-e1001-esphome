@@ -5,6 +5,11 @@
 #include <algorithm>
 
 #include "esphome/components/display/display.h"
+#include "esphome/components/wifi/wifi_component.h"
+#include "esp_chip_info.h"
+#include "esp_flash.h"
+#include "esp_heap_caps.h"
+#include "esp_idf_version.h"
 #include "esp_system.h"
 #include "device.h"
 #include "dial_image.h"
@@ -774,6 +779,87 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
         it.print(cx, ly, cap_f, TextAlign::TOP_CENTER, label);
       }
     }
+  }
+}
+
+// Hardware/software/config snapshot, double green press. Deliberately LTR
+// and English in every language: it is a technical readout.
+inline void draw_debug(Display &it, float batt_v, float batt_pct, bool sd_present,
+                       const char *cfg_url) {
+  it.print(400, 10, lfont(F_MEDIUM), TextAlign::TOP_CENTER, "Debug");
+  it.line(20, 52, 780, 52);
+  char rows[16][2][64];
+  int n = 0;
+  char v[64];
+  auto put = [&](const char *k, const char *val) {
+    snprintf(rows[n][0], sizeof(rows[n][0]), "%s", k);
+    snprintf(rows[n][1], sizeof(rows[n][1]), "%s", val);
+    n++;
+  };
+#ifdef ESPHOME_PROJECT_VERSION
+  put("Firmware", ESPHOME_PROJECT_VERSION);
+#else
+  put("Firmware", "dev (no version stamp)");
+#endif
+  put("ESPHome", ESPHOME_VERSION);
+  put("ESP-IDF", esp_get_idf_version());
+  esp_chip_info_t ci;
+  esp_chip_info(&ci);
+  snprintf(v, sizeof(v), "ESP32-S3 rev %d, %d cores", (int) ci.revision, (int) ci.cores);
+  put("Chip", v);
+  uint32_t fs = 0;
+  esp_flash_get_size(nullptr, &fs);
+  snprintf(v, sizeof(v), "%u MB flash, %u KB PSRAM free", (unsigned) (fs >> 20),
+           (unsigned) (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+  put("Memory", v);
+  snprintf(v, sizeof(v), "%u KB free, %u KB largest block",
+           (unsigned) (esp_get_free_heap_size() / 1024),
+           (unsigned) (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) / 1024));
+  put("Heap", v);
+  auto *w = esphome::wifi::global_wifi_component;
+  if (wifi_strikeout()) {
+    put("Wi-Fi", "gave up (3 failed wakes)");
+  } else if (w->is_connected()) {
+    char ssid[esphome::wifi::SSID_BUFFER_SIZE];
+    w->wifi_ssid_to(std::span<char, esphome::wifi::SSID_BUFFER_SIZE>(ssid));
+    auto ips = w->wifi_sta_ip_addresses();
+    snprintf(v, sizeof(v), "%s  %s  %d dBm", ssid, ips[0].str().c_str(), (int) w->wifi_rssi());
+    put("Wi-Fi", v);
+  } else {
+    put("Wi-Fi", radio_on ? "not connected" : "radio off");
+  }
+  snprintf(v, sizeof(v), "%.2f V  %.0f%%", (double) batt_v, (double) batt_pct);
+  put("Battery", v);
+  put("RTC", rtc_bad ? "BAD" : "ok");
+  put("SD card", sd_present ? "present" : "none");
+  snprintf(v, sizeof(v), "%u s awake, %d wifi strikes", (unsigned) (millis() / 1000),
+           wifi_fail_wakes);
+  put("Uptime", v);
+  if (night_refresh_min > 0)
+    snprintf(v, sizeof(v), "refresh %d min (night %d), sync %d min", refresh_interval_min,
+             night_refresh_min, sync_interval_min);
+  else
+    snprintf(v, sizeof(v), "refresh %d min, sync %d min", refresh_interval_min,
+             sync_interval_min);
+  put("Intervals", v);
+  snprintf(v, sizeof(v), "%d zones, home %s, lang %s", zone_count,
+           home_zone >= 0 ? zones[home_zone].labels[0] : "none", lang::L().code);
+  put("Zones", v);
+  if (cfg_url[0] != 0) {
+    time_t now = ::time(nullptr);
+    if (cfg_fetch_at > 0 && now > cfg_fetch_at)
+      snprintf(v, sizeof(v), "%s (checked %ldh ago)", cfg_url, (long) ((now - cfg_fetch_at) / 3600));
+    else
+      snprintf(v, sizeof(v), "%s", cfg_url);
+    put("Config URL", v);
+  } else {
+    put("Config URL", "unset");
+  }
+  BaseFont *lab = lfont(F_SMALLB), *val = lfont(F_SMALL);
+  int y = 68;
+  for (int i = 0; i < n; i++, y += 25) {
+    it.print(40, y, lab, TextAlign::TOP_LEFT, rows[i][0]);
+    it.print(230, y, val, TextAlign::TOP_LEFT, rows[i][1]);
   }
 }
 

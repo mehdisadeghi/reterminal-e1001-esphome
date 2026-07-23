@@ -7,3 +7,4 @@ __pycache__/
 *.jpeg
 # generated from the private photos above
 reterminal-e1001/reterminal/dial_images.h
+reterminal-e1001/version.yaml

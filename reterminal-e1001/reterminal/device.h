@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <NetworkClientSecure.h>
 #include <SD.h>
 #include <SPI.h>
 #include <sys/time.h>
@@ -77,6 +78,31 @@ inline bool sleep_due() { return !ota_in_progress && millis() > sleep_deadline; 
 // Display cadence: one config drives both the deep-sleep wake interval and
 // the redraw interval while the device is held awake (keep-awake / pause).
 static int refresh_interval_min = 3;
+static int night_refresh_min = 0;  // 0 = no night slowdown
+
+// Wi-Fi strike-out: three consecutive wakes ending without a connection
+// stop further attempts. The counter lives in RTC memory, so deep sleep
+// keeps it and any real reboot starts fresh.
+RTC_DATA_ATTR int wifi_fail_wakes = 0;
+constexpr int WIFI_FAIL_LIMIT = 3;
+inline bool wifi_strikeout() { return wifi_fail_wakes >= WIFI_FAIL_LIMIT; }
+
+// Sleep length in minutes: the refresh interval, stretched to the night
+// interval while the home zone's local time is inside the night window
+// (no home zone = no night slowdown).
+inline int sleep_minutes() {
+  if (night_refresh_min > 0 && home_zone >= 0 && home_zone < zone_count) {
+    time_t now = ::time(nullptr);
+    if (now > MIN_VALID_EPOCH) {
+      time_t local = now + (time_t) zone_offset_min(zones[home_zone], now) * 60;
+      struct tm lt;
+      gmtime_r(&local, &lt);
+      if (is_night(lt.tm_hour))
+        return night_refresh_min;
+    }
+  }
+  return refresh_interval_min;
+}
 static uint32_t last_draw_ms = 0;
 
 inline void mark_draw() { last_draw_ms = millis(); }
@@ -86,6 +112,7 @@ inline bool redraw_due() {
 
 // Mirrors of HA entities and boot diagnostics, set from YAML.
 static bool radio_on = true;      // wifi enabled this wake
+static bool debug_page = false;   // transient hardware/config info page
 static bool rtc_bad = false;      // RTC chip unusable at boot (dead cell / VL / frozen)
 static time_t pre_rtc_time = 0;   // system time captured before the RTC read
 static bool force_sync = false;  // green button: sync + fetch now
@@ -746,19 +773,11 @@ inline void sd_backup(const String &body) {
   }
 }
 
-// Reads /config.json when its content changed since the last applied one;
-// validates everything, applies set_time, and returns the change-set for the
-// shared apply path ("" = nothing to do; sd_error = file rejected).
-inline std::string sd_process() {
-  sd_error = false;
-  if (!sd_mount())
-    return "";
-  sd_load_tzdata();
-  File f = SD.open("/config.json");
-  if (!f)
-    return "";
-  String body = f.readString();
-  f.close();
+// Validates a config.json body when its content changed since the last
+// applied one, applies set_time, and returns the change-set for the shared
+// apply path ("" = nothing to do; sd_error = body rejected). Shared by the
+// SD card and the remote CONFIG_URL — only the transport differs.
+inline std::string process_config(const String &body, bool from_sd) {
   if (body.length() == 0 || body.length() > 8192) {
     sd_error = true;
     return "";
@@ -876,6 +895,10 @@ inline std::string sd_process() {
     snprintf(kv, sizeof(kv), "refresh=%d", (int) doc["refresh_interval_min"]);
     add(kv);
   }
+  if (doc["night_refresh_min"].is<int>()) {
+    snprintf(kv, sizeof(kv), "nrefresh=%d", (int) doc["night_refresh_min"]);
+    add(kv);
+  }
   if (doc["lang"].is<const char *>()) {
     snprintf(kv, sizeof(kv), "lang=%s", (const char *) doc["lang"]);
     add(kv);
@@ -914,9 +937,71 @@ inline std::string sd_process() {
 
   pref.save(&crc);
   esphome::global_preferences->sync();
-  sd_backup(body);
-  ESP_LOGI(TAG, "SD config accepted (%d bytes)", (int) body.length());
+  if (from_sd)
+    sd_backup(body);
+  ESP_LOGI(TAG, "config accepted (%d bytes)", (int) body.length());
   return ch;
+}
+
+inline std::string sd_process() {
+  sd_error = false;
+  if (!sd_mount())
+    return "";
+  sd_load_tzdata();
+  File f = SD.open("/config.json");
+  if (!f)
+    return "";
+  String body = f.readString();
+  f.close();
+  return process_config(body, true);
+}
+
+// --- Remote config: CONFIG_URL over HTTP(S), no card involved ----------------
+// Checked once per day on a network wake, or on demand (long green press).
+// https is accepted without certificate pinning — the URL is the trust
+// anchor, pick one you control.
+
+RTC_DATA_ATTR time_t cfg_fetch_at = 0;
+constexpr time_t CFG_FETCH_PERIOD = 24 * 3600;
+
+inline bool remote_cfg_due() {
+  time_t now = ::time(nullptr);
+  return now > MIN_VALID_EPOCH && now - cfg_fetch_at >= CFG_FETCH_PERIOD;
+}
+
+inline void fetch_remote_config(const char *url) {
+  if (url[0] == 0)
+    return;
+  sd_error = false;
+  cfg_fetch_at = ::time(nullptr);  // rate-limits attempts, not successes
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(15000);
+  NetworkClientSecure tls;
+  bool opened;
+  if (strncmp(url, "https", 5) == 0) {
+    tls.setInsecure();
+    opened = http.begin(tls, url);
+  } else {
+    opened = http.begin(url);
+  }
+  if (!opened) {
+    ESP_LOGW(TAG, "remote config: bad url");
+    sd_error = true;
+    return;
+  }
+  int code = http.GET();
+  if (code != 200) {
+    ESP_LOGW(TAG, "remote config: HTTP %d", code);
+    http.end();
+    sd_error = true;
+    return;
+  }
+  String body = http.getString();
+  http.end();
+  std::string ch = process_config(body, false);
+  if (!ch.empty())
+    pending_changes = ch;
 }
 
 // --- SD firmware update & app-level rollback ----------------------------------
