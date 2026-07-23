@@ -11,23 +11,31 @@ DEVICE ?= reterminal-e1001
 YAML = esphome-$(DEVICE).yaml
 FILES = $(YAML)
 DIRS = reterminal-e1001
-BIN = .esphome/build/$(DEVICE)/.pioenvs/$(DEVICE)/firmware.bin
+BIN = .esphome/build/$(DEVICE)/build/firmware.ota.bin
 
-.PHONY: build deploy release test
+.PHONY: build deploy release test gen-images
+
+# Bake the <city>.png dial faces from $(IMAGES) into the firmware; build
+# and deploy depend on it so the embedded set always matches the files.
+# Per-unit sets are just directories: make release DEVICE=x IMAGES=photos/x
+IMAGES ?= .
+gen-images:
+	uv run tools/gen_dial_images.py $(IMAGES)
 
 # Compile locally into an SD-flashable app image. Needs the real
 # secrets.yaml beside $(YAML) — its values are baked into the binary.
 # Pinned to the device builder's version; newer resolvers also reject the
 # bare Arduino library names in the yaml.
 ESPHOME_VERSION ?= 2026.7.0
-build:
+build: gen-images
 	uvx esphome@$(ESPHOME_VERSION) compile $(YAML)
 	@echo "copy $(BIN) to the card as /firmware.bin"
 
 # Copy the builder file set to the HA host (secrets.yaml stays untouched).
 # tar-over-ssh: the HA SSH add-on has no rsync, but BusyBox tar is there.
-deploy:
+deploy: gen-images
 	COPYFILE_DISABLE=1 tar cf - $(FILES) $(DIRS) | ssh $(USER)@$(HOST) "mkdir -p $(TARGET_DIR) && tar xvf - -C $(TARGET_DIR)"
+	@echo "deployed to $(USER)@$(HOST):$(TARGET_DIR) (files only; 'make release' compiles and flashes)"
 
 # Deploy, then have the ESPHome Device Builder compile and OTA-install the
 # firmware. HA's firmware update entity is version-gated and never sees

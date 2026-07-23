@@ -55,6 +55,13 @@ esphome:
         # Read RTC time before anything needs the clock / 启动时读取 RTC 时间
         - lambda: 'reterminal::pre_rtc_time = ::time(nullptr);'
         - pcf8563.read_time:
+        # Mount an already inserted card before the first draw can use its
+        # dial-face overrides; the draw path itself never mounts
+        - if:
+            condition:
+              binary_sensor.is_on: sd_card_detect
+            then:
+              - lambda: 'reterminal::sd_mount();'
         # Mirror all HA config entities, flag a dead RTC, restore the history
         # snapshot and apply the start page on cold boot
         - lambda: |-

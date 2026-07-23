@@ -574,6 +574,42 @@ switch:
           if (millis() > 8000)
             id(epaper_display).update();
 
+  # Photo dial faces (embedded or SD <city>.png)
+  - platform: template
+    name: "Dial Photos"
+    id: dial_photos
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+    on_turn_off:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+
+  # Inverted dials inside the configured night window
+  - platform: template
+    name: "Night Mode"
+    id: night_mode
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+    on_turn_off:
+      - lambda: |-
+          reterminal::bump_interact();
+          if (millis() > 8000)
+            id(epaper_display).update();
+
   # Time offsets in the analog clock captions (vs. home zone, or UTC)
   - platform: template
     name: "Analog Clock Offsets"

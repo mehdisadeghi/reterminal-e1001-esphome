@@ -7,6 +7,7 @@
 #include "esphome/components/display/display.h"
 #include "esp_system.h"
 #include "device.h"
+#include "dial_image.h"
 #include "khayyam_fa.h"
 #include "hijri.h"
 #include "jalali.h"
@@ -521,7 +522,8 @@ inline void thick_line(Display &it, int x1, int y1, int x2, int y2, int w,
 }
 
 // Five analog world clocks, layout adapts to the zone count.
-inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_inside) {
+inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_inside, bool photos,
+                               bool night_mode) {
   BaseFont *med = lfont(F_MEDIUM);
   time_t now = ::time(nullptr);
   if (now < MIN_VALID_EPOCH) {
@@ -671,11 +673,15 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
     struct tm lt;
     gmtime_r(&local, &lt);
     int row = i < r1 || rows == 1 ? 0 : 1;
-    int cx = cxs[i];
+    // RTL flips the whole layout horizontally: zone order runs right to
+    // left and the staircase mirrors (CECE/ECEC -> ECEC/CECE), margins
+    // included (the battery hairline sits left in RTL)
+    int cx = mx(cxs[i]);
     int cy = cy_row[row];
     bool is_local = i == home_zone;
     // inverted dial = that zone is inside its configured night window
-    bool night = is_night(lt.tm_hour);
+    bool night = night_mode && is_night(lt.tm_hour);
+    const uint8_t *photo = photos ? zone_image(z, R) : nullptr;
     auto fg = night ? esphome::display::COLOR_OFF : esphome::display::COLOR_ON;
     if (night) {
       it.filled_circle(cx, cy, R);
@@ -683,20 +689,45 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
       it.circle(cx, cy, R);
       it.circle(cx, cy, R - 1);
     }
+    if (photo != nullptr) {
+      // day: ink portrait on paper; night: the same face as a negative on
+      // the filled dial, matching the paper hands
+      int stride = (2 * R + 7) / 8;
+      for (int yy = 0; yy < 2 * R; yy++) {
+        int py = yy - R;
+        for (int xx = 0; xx < 2 * R; xx++) {
+          int px = xx - R;
+          if (px * px + py * py > (R - 2) * (R - 2))
+            continue;
+          if (photo[yy * stride + (xx >> 3)] & (0x80 >> (xx & 7)))
+            it.draw_pixel_at(cx - R + xx, cy - R + yy, fg);
+        }
+      }
+    }
+    // photo faces can be dark (or light, at night) exactly where a hand
+    // lies, so every stroke over one first clears a 2 px halo in the
+    // opposite color — the boundary keeps full contrast whatever the
+    // dither underneath does
+    auto halo = night ? esphome::display::COLOR_ON : esphome::display::COLOR_OFF;
+    auto stroke = [&](int x0, int y0, int x1, int y1, int w) {
+      if (photo != nullptr)
+        thick_line(it, x0, y0, x1, y1, w + 4, halo);
+      thick_line(it, x0, y0, x1, y1, w, fg);
+    };
     for (int k = 0; k < 12; k++) {
       float a = k * PI_F / 6.0f;
       bool quarter = (k % 3 == 0);  // longer, heavier markers at 12/3/6/9
       int inner = quarter ? R - 20 : R - 12;
-      thick_line(it, cx + (int) (sinf(a) * inner), cy - (int) (cosf(a) * inner),
-                 cx + (int) (sinf(a) * (R - 4)), cy - (int) (cosf(a) * (R - 4)),
-                 quarter ? 5 : 2, fg);
+      stroke(cx + (int) (sinf(a) * inner), cy - (int) (cosf(a) * inner),
+             cx + (int) (sinf(a) * (R - 4)), cy - (int) (cosf(a) * (R - 4)),
+             quarter ? 5 : 2);
     }
     float ah = ((lt.tm_hour % 12) + lt.tm_min / 60.0f) * PI_F / 6.0f;
     float am = lt.tm_min * PI_F / 30.0f;
-    thick_line(it, cx, cy, cx + (int) (sinf(ah) * R * 0.52f), cy - (int) (cosf(ah) * R * 0.52f),
-               6, fg);
-    thick_line(it, cx, cy, cx + (int) (sinf(am) * R * 0.85f), cy - (int) (cosf(am) * R * 0.85f),
-               4, fg);
+    stroke(cx, cy, cx + (int) (sinf(ah) * R * 0.52f), cy - (int) (cosf(ah) * R * 0.52f), 6);
+    stroke(cx, cy, cx + (int) (sinf(am) * R * 0.85f), cy - (int) (cosf(am) * R * 0.85f), 4);
+    if (photo != nullptr)
+      it.filled_circle(cx, cy, 7, halo);
     it.filled_circle(cx, cy, 5, fg);
     // the local zone is marked by an inverted caption instead of its dial
     char label[48];
@@ -719,6 +750,12 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
         it.get_text_bounds(cx, ly, label, cap_f, TextAlign::TOP_CENTER, &bx, &by, &bw, &bh);
         it.filled_rectangle(bx - 6, by - 3, bw + 12, bh + 6, fg);
         it.print(cx, ly, cap_f, tcol, TextAlign::TOP_CENTER, label);
+      } else if (photo != nullptr) {
+        // same contrast rule as the hands: clear a chip under the label
+        int bx, by, bw, bh;
+        it.get_text_bounds(cx, ly, label, cap_f, TextAlign::TOP_CENTER, &bx, &by, &bw, &bh);
+        it.filled_rectangle(bx - 6, by - 3, bw + 12, bh + 6, halo);
+        it.print(cx, ly, cap_f, fg, TextAlign::TOP_CENTER, label);
       } else {
         it.print(cx, ly, cap_f, fg, TextAlign::TOP_CENTER, label);
       }

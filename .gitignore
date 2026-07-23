@@ -2,3 +2,8 @@ secrets.yaml
 .esphome/
 __pycache__/
 .DS_Store
+*.png
+*.jpg
+*.jpeg
+# generated from the private photos above
+reterminal-e1001/reterminal/dial_images.h

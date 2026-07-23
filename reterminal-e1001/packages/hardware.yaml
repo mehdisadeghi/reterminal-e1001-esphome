@@ -15,6 +15,13 @@ esp32:
       # directory VFS calls for the SD (FAT32) filesystem
       CONFIG_VFS_SUPPORT_DIR: "y"
 
+# The ESP32-S3R8 carries 8 MB octal PSRAM; with it enabled, allocations
+# over 16 KB (notably the PNG decoder's ~44 KB state) leave the internal
+# heap automatically
+psram:
+  mode: octal
+  speed: 80MHz
+
 # Enable serial logging / 启用串口日志
 # The reTerminal E series has a CH340K USB-to-UART bridge on UART0.
 # Default ESP32-S3 logger uses USB_CDC — won't produce output on the physical port.

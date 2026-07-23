@@ -180,6 +180,7 @@ script:
                   - lambda: 'App.safe_reboot();'
                 else:
                   - lambda: |-
+                      reterminal::dial_images_reset();
                       std::string ch = reterminal::sd_process();
                       if (!ch.empty())
                         reterminal::pending_changes = ch;
@@ -550,7 +551,8 @@ display:
       switch (reterminal::page) {
         case 0:
           reterminal::draw_analog_clocks(it, id(analog_offsets).state,
-                                         id(analog_inside).state);
+                                         id(analog_inside).state, id(dial_photos).state,
+                                         id(night_mode).state);
           break;
         case 1:
           reterminal::draw_world_clock(it);
