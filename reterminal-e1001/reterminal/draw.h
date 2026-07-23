@@ -220,9 +220,10 @@ inline void draw_status_bar(Display &it, float battery_pct, float dev_t, float d
     it.print(x, 463, small_f, esphome::display::COLOR_OFF, aend, "RTC!");
     x -= dir * 54;
   }
-  if (show_climate && !std::isnan(dev_t) && !std::isnan(dev_h))
-    it.printf(x, 463, small_f, esphome::display::COLOR_OFF, aend,
-              "T %.0f° H %.0f", dev_t, dev_h);
+  if (show_climate && !std::isnan(dev_t) && !std::isnan(dev_h)) {
+    lang::climate(buf, sizeof(buf), dev_t, dev_h);
+    it.print(x, 463, small_f, esphome::display::COLOR_OFF, aend, buf);
+  }
 }
 
 inline void draw_numbers(Display &it) {

@@ -16,6 +16,8 @@ constexpr const char *TITLE_HUM = "ﺖﻋﺎﺳ ۲۴ - ﺖﺑﻮﻃﺭ";
 constexpr const char *WIFI_TITLE = "ﯼﺎﻓﯼﺍﻭ ﯼﺯﺍﺪﻧﺍﻩﺍﺭ";
 constexpr const char *WIFI_JOIN = ":ﺪﯾﻮﺷ ﻞﺻﻭ ﺕﺎﭙﺳﺍﺕﺎﻫ ﻦﯾﺍ ﻪﺑ";
 constexpr const char *OPEN_URL = "ﺪﯿﻨﮐ ﺯﺎﺑ ﺍﺭ http://192.168.4.1 ﺲﭙﺳ";
+constexpr const char *UNIT_T = "ﺩ";
+constexpr const char *UNIT_H = "ﺭ";
 
 static const char *const WEEKDAYS[7] = {"ﻪﺒﻨﺸﮑﯾ", "ﻪﺒﻨﺷﻭﺩ", "ﻪﺒﻨﺷﻪﺳ", "ﻪﺒﻨﺷﺭﺎﻬﭼ", "ﻪﺒﻨﺸﺠﻨﭘ", "ﻪﻌﻤﺟ", "ﻪﺒﻨﺷ"};
 static const char *const MONTHS[12] = {"ﻪﯾﻮﻧﺍﮊ", "ﻪﯾﺭﻮﻓ", "ﺱﺭﺎﻣ", "ﻞﯾﺭﻭﺁ", "ﻪﻣ", "ﻦﺋﻭﮊ", "ﻪﯿﺋﻭﮊ", "ﺕﻭﺍ", "ﺮﺒﻣﺎﺘﭙﺳ", "ﺮﺒﺘﮐﺍ", "ﺮﺒﻣﺍﻮﻧ", "ﺮﺒﻣﺎﺳﺩ"};

@@ -53,6 +53,8 @@ constexpr const char *TITLE_HUM = "Humidity - 24h";
 constexpr const char *WIFI_TITLE = "Wi-Fi setup";
 constexpr const char *WIFI_JOIN = "Join the hotspot:";
 constexpr const char *OPEN_URL = "then open http://192.168.4.1";
+constexpr const char *UNIT_T = "T";
+constexpr const char *UNIT_H = "H";
 static const char *const WEEKDAYS[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 static const char *const MONTHS[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
@@ -66,7 +68,7 @@ struct Pack {
   void (*num)(char *out, size_t n, const char *in);
   const char *title_clock;
   const char *wait_sync, *no_zones, *no_cols, *title_temp, *title_hum;
-  const char *wifi_title, *wifi_join, *open_url, *unit_pct;
+  const char *wifi_title, *wifi_join, *open_url, *unit_pct, *unit_t, *unit_h;
   const char *const *weekdays;  // [7], tm_wday order
   const char *const *months;    // [12] Gregorian
   const char *const *jmonths;   // [12] Solar Hijri
@@ -82,11 +84,11 @@ inline const char *fa_city(const char *iana) {
 
 static const Pack PACKS[] = {
     {"en", false, nullptr, num_ascii, en::TITLE_CLOCK, en::WAIT_SYNC, en::NO_ZONES, en::NO_COLS, en::TITLE_TEMP,
-     en::TITLE_HUM, en::WIFI_TITLE, en::WIFI_JOIN, en::OPEN_URL, "%", en::WEEKDAYS, en::MONTHS,
-     jalali::MONTHS, hijri::MONTHS},
+     en::TITLE_HUM, en::WIFI_TITLE, en::WIFI_JOIN, en::OPEN_URL, "%", en::UNIT_T, en::UNIT_H,
+     en::WEEKDAYS, en::MONTHS, jalali::MONTHS, hijri::MONTHS},
     {"fa", true, fa_city, num_persian, fa::TITLE_CLOCK, fa::WAIT_SYNC, fa::NO_ZONES, fa::NO_COLS, fa::TITLE_TEMP,
-     fa::TITLE_HUM, fa::WIFI_TITLE, fa::WIFI_JOIN, fa::OPEN_URL, "٪", fa::WEEKDAYS, fa::MONTHS,
-     fa::JMONTHS, fa::HMONTHS},
+     fa::TITLE_HUM, fa::WIFI_TITLE, fa::WIFI_JOIN, fa::OPEN_URL, "٪", fa::UNIT_T, fa::UNIT_H,
+     fa::WEEKDAYS, fa::MONTHS, fa::JMONTHS, fa::HMONTHS},
 };
 constexpr int LANG_COUNT = sizeof(PACKS) / sizeof(PACKS[0]);
 
@@ -115,6 +117,19 @@ inline void percent(char *out, size_t n, const char *digits) {
     snprintf(out, n, "%s%s", L().unit_pct, d);
   else
     snprintf(out, n, "%s%s", d, L().unit_pct);
+}
+
+// Status-bar climate readout: "T 23° H 45" / visual-order "۴۵ ر ۲۳° د"
+inline void climate(char *out, size_t n, float t, float h) {
+  char tb[8], hb[8], tl[16], hl[16];
+  snprintf(tb, sizeof(tb), "%.0f", (double) t);
+  snprintf(hb, sizeof(hb), "%.0f", (double) h);
+  L().num(tl, sizeof(tl), tb);
+  L().num(hl, sizeof(hl), hb);
+  if (L().rtl)
+    snprintf(out, n, "%s %s %s° %s", hl, L().unit_h, tl, L().unit_t);
+  else
+    snprintf(out, n, "%s %s° %s %s", L().unit_t, tl, L().unit_h, hl);
 }
 
 inline void d_m_y(char *out, size_t n, int d, const char *mon, int y) {

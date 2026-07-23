@@ -10,6 +10,9 @@ strings:
   WIFI_TITLE: "راه‌اندازی وای‌فای"
   WIFI_JOIN: "به این هات‌اسپات وصل شوید:"
   OPEN_URL: "سپس http://192.168.4.1 را باز کنید"
+  # status-bar climate initials: دما / رطوبت
+  UNIT_T: "د"
+  UNIT_H: "ر"
 
 # tm_wday order: Sunday first
 weekdays: [یکشنبه, دوشنبه, سه‌شنبه, چهارشنبه, پنجشنبه, جمعه, شنبه]
