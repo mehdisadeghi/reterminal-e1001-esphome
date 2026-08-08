@@ -1,10 +1,14 @@
 #pragma once
 
-// Gregorian -> Lunar Hijri, header-only: the tabular (arithmetic) Islamic
-// calendar — 30-year cycle, leap years {2,5,7,10,13,16,18,21,24,26,29},
-// civil epoch JDN 1948440 (16 July 622 Julian). Within ±1 day of
-// observation-based calendars, which is fine for a status bar date.
+// Gregorian -> Lunar Hijri. Inside the covered window the official
+// Iranian sighting-based calendar is used exactly, from the
+// persian-calendar project's month-length table (hijri_ir.h — data, not
+// a formula: sighting decisions cannot be computed). Outside it, the
+// tabular (arithmetic) calendar: 30-year cycle, leap years
+// {2,5,7,10,13,16,18,21,24,26,29}, astronomical epoch JDN 1948439 —
+// within ±1 day of observation.
 
+#include "hijri_ir.h"
 #include "pure.h"
 
 namespace hijri {
@@ -32,10 +36,33 @@ inline bool leap_year(int year_in_cycle) {
   return false;
 }
 
-inline void from_gregorian(int gy, int gm, int gd, int &hy, int &hm, int &hd) {
-  // days_from_civil counts from 1970-01-01 (JDN 2440588); the Islamic
-  // civil epoch is JDN 1948440
-  long k = reterminal::days_from_civil(gy, gm, gd) + 2440588 - 1948440;
+inline bool from_table(long jdn, int &hy, int &hm, int &hd) {
+  long days = jdn - IR_START_JDN;
+  if (days < 0)
+    return false;
+  long acc = 0;
+  for (int m = 0; m < IR_YEARS * 12; m++) {
+    int len = (IR_MONTHS[m / 12] >> (11 - m % 12)) & 1 ? 30 : 29;
+    if (days < acc + len) {
+      hy = IR_START_YEAR + m / 12;
+      hm = m % 12 + 1;
+      hd = (int) (days - acc) + 1;
+      return true;
+    }
+    acc += len;
+  }
+  return false;
+}
+
+// Returns true when the exact Iranian table produced the date, false on
+// the tabular fallback — the calendar page annotates which one it shows.
+inline bool from_gregorian(int gy, int gm, int gd, int &hy, int &hm, int &hd) {
+  // days_from_civil counts from 1970-01-01 (JDN 2440588)
+  long jdn = reterminal::days_from_civil(gy, gm, gd) + 2440588;
+  if (from_table(jdn, hy, hm, hd))
+    return true;
+  // tabular fallback, astronomical epoch JDN 1948439
+  long k = jdn - 1948439;
   long cycle = k / 10631;  // days in 30 lunar years
   k %= 10631;
   int y = 1;
@@ -55,6 +82,7 @@ inline void from_gregorian(int gy, int gm, int gd, int &hy, int &hm, int &hd) {
     hm++;
   }
   hd = (int) k + 1;
+  return false;
 }
 
 }  // namespace hijri

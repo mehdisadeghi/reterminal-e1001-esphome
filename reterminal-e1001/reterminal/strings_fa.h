@@ -18,11 +18,16 @@ constexpr const char *WIFI_JOIN = ":ﺪﯾﻮﺷ ﻞﺻﻭ ﺕﺎﭙﺳﺍﺕﺎ
 constexpr const char *OPEN_URL = "ﺪﯿﻨﮐ ﺯﺎﺑ ﺍﺭ http://192.168.4.1 ﺲﭙﺳ";
 constexpr const char *UNIT_T = "ﺩ";
 constexpr const char *UNIT_H = "ﺭ";
+constexpr const char *CHARGE = "!ﺪﯿﻨﮐ ﮊﺭﺎﺷ";
+constexpr const char *ZODIAC_LABEL = "ﯽﮑﻠﻓ ﺝﺮﺑ";
+constexpr const char *CAL_IR = "ﯽﻧﺍﺮﯾﺍ ﯼﺮﻤﻗ";
+constexpr const char *CAL_TAB = "ﯽﻟﻭﺪﺟ ﯼﺮﻤﻗ";
 
 static const char *const WEEKDAYS[7] = {"ﻪﺒﻨﺸﮑﯾ", "ﻪﺒﻨﺷﻭﺩ", "ﻪﺒﻨﺷﻪﺳ", "ﻪﺒﻨﺷﺭﺎﻬﭼ", "ﻪﺒﻨﺸﺠﻨﭘ", "ﻪﻌﻤﺟ", "ﻪﺒﻨﺷ"};
 static const char *const MONTHS[12] = {"ﻪﯾﻮﻧﺍﮊ", "ﻪﯾﺭﻮﻓ", "ﺱﺭﺎﻣ", "ﻞﯾﺭﻭﺁ", "ﻪﻣ", "ﻦﺋﻭﮊ", "ﻪﯿﺋﻭﮊ", "ﺕﻭﺍ", "ﺮﺒﻣﺎﺘﭙﺳ", "ﺮﺒﺘﮐﺍ", "ﺮﺒﻣﺍﻮﻧ", "ﺮﺒﻣﺎﺳﺩ"};
 static const char *const JMONTHS[12] = {"ﻦﯾﺩﺭﻭﺮﻓ", "ﺖﺸﻬﺒﯾﺩﺭﺍ", "ﺩﺍﺩﺮﺧ", "ﺮﯿﺗ", "ﺩﺍﺩﺮﻣ", "ﺭﻮﯾﺮﻬﺷ", "ﺮﻬﻣ", "ﻥﺎﺑﺁ", "ﺭﺫﺁ", "ﯼﺩ", "ﻦﻤﻬﺑ", "ﺪﻨﻔﺳﺍ"};
 static const char *const HMONTHS[12] = {"ﻡﺮﺤﻣ", "ﺮﻔﺻ", "ﻝﻭﻻﺍﻊﯿﺑﺭ", "ﯽﻧﺎﺜﻟﺍﻊﯿﺑﺭ", "ﻝﻭﻻﺍﯼﺩﺎﻤﺟ", "ﯽﻧﺎﺜﻟﺍﯼﺩﺎﻤﺟ", "ﺐﺟﺭ", "ﻥﺎﺒﻌﺷ", "ﻥﺎﻀﻣﺭ", "ﻝﺍﻮﺷ", "ﻩﺪﻌﻘﯾﺫ", "ﻪﺠﺤﯾﺫ"};
+static const char *const ZODIAC[12] = {"ﻞﻤﺣ", "ﺭﻮﺛ", "ﺍﺯﻮﺟ", "ﻥﺎﻃﺮﺳ", "ﺪﺳﺍ", "ﻪﻠﺒﻨﺳ", "ﻥﺍﺰﯿﻣ", "ﺏﺮﻘﻋ", "ﺱﻮﻗ", "ﯼﺪﺟ", "ﻮﻟﺩ", "ﺕﻮﺣ"};
 
 // CLDR exemplar cities (shaped); zones without a Persian name fall
 // back to their configured label.

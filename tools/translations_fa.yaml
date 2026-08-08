@@ -13,6 +13,12 @@ strings:
   # status-bar climate initials: دما / رطوبت
   UNIT_T: "د"
   UNIT_H: "ر"
+  # empty-battery screen
+  CHARGE: "شارژ کنید!"
+  ZODIAC_LABEL: "برج فلکی"
+  # which lunar Hijri produced today's date (calendar page annotation)
+  CAL_IR: "قمری ایرانی"
+  CAL_TAB: "قمری جدولی"
 
 # tm_wday order: Sunday first
 weekdays: [یکشنبه, دوشنبه, سه‌شنبه, چهارشنبه, پنجشنبه, جمعه, شنبه]
@@ -25,3 +31,7 @@ months_jalali: [فروردین, اردیبهشت, خرداد, تیر, مرداد
 
 months_hijri: [محرم, صفر, ربیع‌الاول, ربیع‌الثانی, جمادی‌الاول, جمادی‌الثانی,
                رجب, شعبان, رمضان, شوال, ذیقعده, ذیحجه]
+
+# zodiac signs; index = Jalali month - 1 (the solar zodiac and the Jalali
+# months coincide)
+zodiac: [حمل, ثور, جوزا, سرطان, اسد, سنبله, میزان, عقرب, قوس, جدی, دلو, حوت]

@@ -49,7 +49,7 @@ doc = yaml.safe_load(open("tools/translations_fa.yaml", encoding="utf-8"))
 strings = {k: shape(v) for k, v in doc["strings"].items()}
 tables = {name: [shape(v) for v in doc[name]]
           for name in ("weekdays", "months_gregorian", "months_jalali",
-                       "months_hijri")}
+                       "months_hijri", "zodiac")}
 
 # CLDR exemplar city names for every zone in the embedded table, so the
 # clock pages show Persian city names without anyone typing Persian.
@@ -120,7 +120,8 @@ with open("reterminal-e1001/reterminal/strings_fa.h", "w", encoding="utf-8") as 
         f.write(f'constexpr const char *{k} = "{cesc(v)}";\n')
     f.write("\n")
     for name, cname in (("weekdays", "WEEKDAYS"), ("months_gregorian", "MONTHS"),
-                        ("months_jalali", "JMONTHS"), ("months_hijri", "HMONTHS")):
+                        ("months_jalali", "JMONTHS"), ("months_hijri", "HMONTHS"),
+                        ("zodiac", "ZODIAC")):
         vals = ", ".join(f'"{cesc(v)}"' for v in tables[name])
         f.write(f"static const char *const {cname}[{len(tables[name])}] = {{{vals}}};\n")
     f.write("\n// CLDR exemplar cities (shaped); zones without a Persian name fall\n"

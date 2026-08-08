@@ -55,9 +55,21 @@ constexpr const char *WIFI_JOIN = "Join the hotspot:";
 constexpr const char *OPEN_URL = "then open http://192.168.4.1";
 constexpr const char *UNIT_T = "T";
 constexpr const char *UNIT_H = "H";
+constexpr const char *CHARGE = "Charge!";
+constexpr const char *ZODIAC_LABEL = "Zodiac";
+constexpr const char *CAL_IR = "Iranian lunar";
+constexpr const char *CAL_TAB = "tabular lunar";
 static const char *const WEEKDAYS[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 static const char *const MONTHS[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+static const char *const WEEKDAYS_FULL[7] = {"Sunday",   "Monday", "Tuesday", "Wednesday",
+                                             "Thursday", "Friday", "Saturday"};
+static const char *const MONTHS_FULL[12] = {"January", "February", "March",     "April",
+                                            "May",     "June",     "July",      "August",
+                                            "September", "October", "November", "December"};
+static const char *const ZODIAC[12] = {"Aries", "Taurus",  "Gemini",      "Cancer",
+                                       "Leo",   "Virgo",   "Libra",       "Scorpio",
+                                       "Sagittarius", "Capricorn", "Aquarius", "Pisces"};
 }  // namespace en
 
 struct Pack {
@@ -73,6 +85,14 @@ struct Pack {
   const char *const *months;    // [12] Gregorian
   const char *const *jmonths;   // [12] Solar Hijri
   const char *const *hmonths;   // [12] Lunar Hijri
+  // calendar page: unabbreviated names and the zodiac (fa tables are
+  // already full, so they double up)
+  const char *const *wdays_full;   // [7]
+  const char *const *months_full;  // [12] Gregorian
+  const char *const *zodiac;       // [12], index = Jalali month - 1
+  const char *zodiac_label;
+  const char *cal_ir, *cal_tab;    // lunar Hijri source annotation
+  const char *charge;              // empty-battery screen
 };
 
 inline const char *fa_city(const char *iana) {
@@ -85,10 +105,12 @@ inline const char *fa_city(const char *iana) {
 static const Pack PACKS[] = {
     {"en", false, nullptr, num_ascii, en::TITLE_CLOCK, en::WAIT_SYNC, en::NO_ZONES, en::NO_COLS, en::TITLE_TEMP,
      en::TITLE_HUM, en::WIFI_TITLE, en::WIFI_JOIN, en::OPEN_URL, "%", en::UNIT_T, en::UNIT_H,
-     en::WEEKDAYS, en::MONTHS, jalali::MONTHS, hijri::MONTHS},
+     en::WEEKDAYS, en::MONTHS, jalali::MONTHS, hijri::MONTHS, en::WEEKDAYS_FULL,
+     en::MONTHS_FULL, en::ZODIAC, en::ZODIAC_LABEL, en::CAL_IR, en::CAL_TAB, en::CHARGE},
     {"fa", true, fa_city, num_persian, fa::TITLE_CLOCK, fa::WAIT_SYNC, fa::NO_ZONES, fa::NO_COLS, fa::TITLE_TEMP,
      fa::TITLE_HUM, fa::WIFI_TITLE, fa::WIFI_JOIN, fa::OPEN_URL, "٪", fa::UNIT_T, fa::UNIT_H,
-     fa::WEEKDAYS, fa::MONTHS, fa::JMONTHS, fa::HMONTHS},
+     fa::WEEKDAYS, fa::MONTHS, fa::JMONTHS, fa::HMONTHS, fa::WEEKDAYS, fa::MONTHS,
+     fa::ZODIAC, fa::ZODIAC_LABEL, fa::CAL_IR, fa::CAL_TAB, fa::CHARGE},
 };
 constexpr int LANG_COUNT = sizeof(PACKS) / sizeof(PACKS[0]);
 

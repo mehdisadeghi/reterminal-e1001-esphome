@@ -135,12 +135,16 @@ static void test_home_zone() {
 
 static void test_hijri() {
   int hy, hm, hd;
-  hijri::from_gregorian(622, 7, 19, hy, hm, hd);
-  CHECK(hy == 1 && hm == 1 && hd == 1);  // civil epoch (proleptic Gregorian)
+  hijri::from_gregorian(622, 7, 18, hy, hm, hd);
+  CHECK(hy == 1 && hm == 1 && hd == 1);  // pre-table: tabular astronomical epoch
+  // inside the Iranian table (values cross-checked against the
+  // persian-calendar reference implementation)
   hijri::from_gregorian(2000, 1, 1, hy, hm, hd);
-  CHECK(hy == 1420 && hm == 9 && hd == 24);  // 24 Ramadan 1420 (tabular)
+  CHECK(hy == 1420 && hm == 9 && hd == 23);
   hijri::from_gregorian(2026, 7, 22, hy, hm, hd);
-  CHECK(hy == 1448 && hm == 2 && hd == 6);  // 6 Safar 1448 (tabular)
+  CHECK(hy == 1448 && hm == 2 && hd == 7);
+  hijri::from_gregorian(2026, 7, 30, hy, hm, hd);
+  CHECK(hy == 1448 && hm == 2 && hd == 15);  // the reported anchor
 }
 
 static void test_zone_specs() {
