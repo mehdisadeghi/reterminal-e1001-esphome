@@ -87,19 +87,71 @@ RTC_DATA_ATTR int wifi_fail_wakes = 0;
 constexpr int WIFI_FAIL_LIMIT = 3;
 inline bool wifi_strikeout() { return wifi_fail_wakes >= WIFI_FAIL_LIMIT; }
 
+constexpr int CALENDAR_PAGE = 8;  // dates only: refreshes once a day
+constexpr int CHARGE_PAGE = 9;    // empty-battery takeover; also selectable to verify
+
+// --- Battery end of life -----------------------------------------------------
+// A dead device holds whatever frame it last drew, so the useful last frame
+// is "Charge!", not stale data. It is painted while there is still headroom
+// for a clean refresh and then never repainted: the panel keeps it with no
+// power at all. Two consecutive wakes below the line are required — pack
+// voltage rebounds once the radio goes quiet, and a single sample would
+// latch on a transmit dip.
+RTC_DATA_ATTR bool battery_critical = false;
+RTC_DATA_ATTR bool charge_drawn = false;
+RTC_DATA_ATTR int batt_low_wakes = 0;
+constexpr int BATT_LOW_WAKES = 2;
+constexpr int CHARGE_SLEEP_MIN = 30;  // latched: wake rarely, only to spot a recharge
+
+inline void battery_check(float volts) {
+  if (std::isnan(volts))
+    return;
+  if (volts >= BATT_RECOVER_V) {
+    battery_critical = false;
+    charge_drawn = false;
+    batt_low_wakes = 0;
+  } else if (volts <= BATT_CRITICAL_V) {
+    if (++batt_low_wakes >= BATT_LOW_WAKES)
+      battery_critical = true;
+  } else {
+    batt_low_wakes = 0;
+  }
+}
+
+// The Charge! frame is already on the panel and the pack has not recovered:
+// there is nothing left to draw, and refreshing this low risks a bad frame.
+inline bool charge_hold() { return battery_critical && charge_drawn; }
+
+// Local time at the home zone (UTC when none is configured).
+inline time_t home_local(time_t now) {
+  if (home_zone >= 0 && home_zone < zone_count)
+    return now + (time_t) zone_offset_min(zones[home_zone], now) * 60;
+  return now;
+}
+
 // Sleep length in minutes: the refresh interval, stretched to the night
 // interval while the home zone's local time is inside the night window
-// (no home zone = no night slowdown).
+// (no home zone = no night slowdown). The calendar page shows nothing
+// that changes within a day, so it sleeps until just past local midnight.
 inline int sleep_minutes() {
-  if (night_refresh_min > 0 && home_zone >= 0 && home_zone < zone_count) {
-    time_t now = ::time(nullptr);
-    if (now > MIN_VALID_EPOCH) {
-      time_t local = now + (time_t) zone_offset_min(zones[home_zone], now) * 60;
-      struct tm lt;
-      gmtime_r(&local, &lt);
-      if (is_night(lt.tm_hour))
-        return night_refresh_min;
-    }
+  time_t now = ::time(nullptr);
+  // Latched empty: nothing left to show, so wake only often enough to
+  // notice a recharge (never sleeping for good — a charged pack must
+  // bring the device back on its own)
+  if (battery_critical)
+    return CHARGE_SLEEP_MIN;
+  if (page == CALENDAR_PAGE && now > MIN_VALID_EPOCH) {
+    long to_midnight = 86400 - home_local(now) % 86400;
+    int m = (int) (to_midnight / 60) + 1;
+    return m < refresh_interval_min ? refresh_interval_min : m;
+  }
+  if (night_refresh_min > 0 && home_zone >= 0 && home_zone < zone_count &&
+      now > MIN_VALID_EPOCH) {
+    struct tm lt;
+    time_t local = home_local(now);
+    gmtime_r(&local, &lt);
+    if (is_night(lt.tm_hour))
+      return night_refresh_min;
   }
   return refresh_interval_min;
 }
@@ -107,18 +159,68 @@ static uint32_t last_draw_ms = 0;
 
 inline void mark_draw() { last_draw_ms = millis(); }
 inline bool redraw_due() {
-  return millis() - last_draw_ms >= (uint32_t) refresh_interval_min * 60000;
+  return !charge_hold() && millis() - last_draw_ms >= (uint32_t) refresh_interval_min * 60000;
 }
 
 // Mirrors of HA entities and boot diagnostics, set from YAML.
 static bool radio_on = true;      // wifi enabled this wake
-static bool debug_page = false;   // transient hardware/config info page
+// Debug is a session, not just a screen: it holds the device awake with the
+// radio up so the network, heap and uptime rows read live instead of showing
+// whatever a single wake happened to catch. It expires on its own so a
+// forgotten double-press cannot sit there draining the pack.
+constexpr uint32_t DEBUG_SESSION_MS = 3600000;
+static uint32_t debug_until = 0;
+
+inline bool debug_active() { return debug_until != 0 && millis() < debug_until; }
+inline bool debug_expired() { return debug_until != 0 && millis() >= debug_until; }
+inline void debug_open() { debug_until = millis() + DEBUG_SESSION_MS; }
+inline void debug_close() { debug_until = 0; }
+inline int debug_minutes_left() { return (int) ((debug_until - millis()) / 60000) + 1; }
+
+// An hour awake with the radio up would finish off an already-empty pack.
+// The readout still shows; only the sleep hold gives way.
+inline bool debug_hold() { return debug_active() && !battery_critical; }
 static bool rtc_bad = false;      // RTC chip unusable at boot (dead cell / VL / frozen)
 static time_t pre_rtc_time = 0;   // system time captured before the RTC read
 static bool force_sync = false;  // green button: sync + fetch now
 static int sync_interval_min = 15;
-static bool page_enabled_[PAGE_COUNT] = {true, true, true, true, true, true, true, true};
-static bool bar_on_[PAGE_COUNT] = {true, true, true, true, true, true, true, true};
+// the charge page is a takeover, not a destination: hidden from navigation
+// unless its Show switch is turned on to eyeball it
+static bool page_enabled_[PAGE_COUNT] = {true, true, true, true, true,
+                                         true, true, true, true, false};
+static bool bar_on_[PAGE_COUNT] = {true, true, true, true, true,
+                                   true, true, true, true, true};
+
+// --- Screen grid -------------------------------------------------------------
+// Two rows: the status bar owns the bar row, the pages own the content row
+// above it. Pages size themselves from content_bottom() instead of naming
+// the bar's edge, so a taller bar pushes their content up rather than being
+// drawn over. Every formula here reproduces the constants the layouts were
+// tuned against at the normal height, so scale 1 is pixel-identical.
+constexpr int SCREEN_H = 480;
+constexpr int NO_BAR_MARGIN = 6;  // bezel breathing room where a page hides the bar
+
+// Accessibility: the bar's type size is the setting, and its height follows
+// the type rather than the other way round. Faces are baked at compile time,
+// so the sizes are a ladder (see register_bar_fonts) and BAR_FONT_STEP is
+// what the HA number steps by.
+constexpr int BAR_FONT_MIN = 20, BAR_FONT_MAX = 40, BAR_FONT_STEP = 5;
+constexpr int BAR_PAD = 14;  // bar height above the type size: 34 at the default
+
+static int bar_font_px = BAR_FONT_MIN;
+
+inline int bar_h() { return bar_font_px + BAR_PAD; }
+inline int bar_top() { return SCREEN_H - bar_h(); }
+inline int bar_mid() { return bar_top() + bar_h() / 2; }
+
+// Horizontal advances follow the type size exactly; icons can only thicken
+// in whole pixels, so they take the rounded step instead.
+inline int bar_px(int at_min) { return at_min * bar_font_px / BAR_FONT_MIN; }
+inline int bar_scale() { return (bar_font_px + BAR_FONT_MIN / 2) / BAR_FONT_MIN; }
+
+inline int content_bottom(int p) {
+  return bar_on_[p] ? bar_top() : SCREEN_H - NO_BAR_MARGIN;
+}
 
 // The status bar shows on every page except the listed ones; "7,8" =
 // hidden on pages 7 and 8 (1-based, comma-separated, empty = everywhere)
@@ -128,8 +230,9 @@ inline void set_bar_skip(const char *s) {
   while (*s) {
     const char *e = strchr(s, ',');
     size_t len = e ? (size_t) (e - s) : strlen(s);
-    if (len == 1 && s[0] >= '1' && s[0] < '1' + PAGE_COUNT)
-      bar_on_[s[0] - '1'] = false;
+    int p = len ? atoi(s) : 0;  // stops at the separator; two-digit pages count
+    if (p >= 1 && p <= PAGE_COUNT)
+      bar_on_[p - 1] = false;
     else if (len)
       ESP_LOGW(TAG, "bar skip: bad token '%.*s'", (int) len, s);
     s += len + (e ? 1 : 0);
@@ -225,6 +328,8 @@ inline bool page_data_empty(int p) {
 }
 
 inline bool network_needed() {
+  if (battery_critical)  // the radio is the biggest draw; the pack has none left
+    return false;
   return sync_due() || page_needs_live(page) ||
          (page_needs_history(page) && (fetch_due() || page_data_empty(page)));
 }
@@ -838,6 +943,8 @@ inline std::string process_config(const String &body, bool from_sd) {
       char kv[80];
       snprintf(kv, sizeof(kv), "zone%d=%s", ++zi, spec);
       add(kv);
+      snprintf(kv, sizeof(kv), "zen%d=%s", zi, (z["enabled"] | true) ? "on" : "off");
+      add(kv);
     }
     while (zi < MAX_ZONES) {
       char kv[12];
@@ -907,6 +1014,10 @@ inline std::string process_config(const String &body, bool from_sd) {
     snprintf(kv, sizeof(kv), "days=%d", (int) doc["combo_days"]);
     add(kv);
   }
+  if (doc["bar_font_size"].is<int>()) {
+    snprintf(kv, sizeof(kv), "barfont=%d", (int) doc["bar_font_size"]);
+    add(kv);
+  }
   if (doc["show_pages"].is<JsonArray>()) {
     JsonArray sp = doc["show_pages"].as<JsonArray>();
     for (int i = 0; i < PAGE_COUNT && i < (int) sp.size(); i++) {
@@ -917,6 +1028,39 @@ inline std::string process_config(const String &body, bool from_sd) {
   if (doc["bar_skip_pages"].is<const char *>()) {
     snprintf(kv, sizeof(kv), "barskip=%s", (const char *) doc["bar_skip_pages"]);
     add(kv);
+  }
+
+  // The file offers exactly what HA offers. These two tables are the whole
+  // remaining surface — the change-set keys they emit are the same ones the
+  // HA queue uses, so a setting cannot exist on one side only.
+  static const struct {
+    const char *json, *key;
+  } TEXTS[] = {{"ha_url", "haurl"}, {"ha_token", "hatoken"}, {"config_url", "cfgurl"}};
+  for (auto &t : TEXTS) {
+    if (doc[t.json].is<const char *>()) {
+      char tv[320];
+      snprintf(tv, sizeof(tv), "%s=%s", t.key, (const char *) doc[t.json]);
+      add(tv);
+    }
+  }
+
+  static const struct {
+    const char *json, *key;
+  } FLAGS[] = {{"auto_cycle", "cycle"},
+               {"radio", "radio"},
+               {"bar_solar_hijri", "barjalali"},
+               {"bar_lunar_hijri", "barhijri"},
+               {"bar_climate", "barclimate"},
+               {"battery_bar", "battbar"},
+               {"dial_photos", "photos"},
+               {"night_mode", "nightmode"},
+               {"analog_offsets", "offsets"},
+               {"analog_labels_inside", "labelsin"}};
+  for (auto &f : FLAGS) {
+    if (doc[f.json].is<bool>()) {
+      snprintf(kv, sizeof(kv), "%s=%s", f.key, doc[f.json].as<bool>() ? "on" : "off");
+      add(kv);
+    }
   }
 
   // one-shot air-gapped clock set: applied only when the value changes

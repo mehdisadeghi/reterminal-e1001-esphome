@@ -9,6 +9,14 @@
 # on the 1-bit panel and read calm at a distance; Medium (500) for labels;
 # Bold (700) only inside inverted bands, where thin strokes fill in.
 font:
+  # zodiac symbols for the calendar page (U+2648-2653) — neither Inter nor
+  # Vazirmatn carries them; DejaVu Sans does, and only these 12 glyphs are
+  # compiled in. Language-independent (a symbol is the i18n).
+  - file: "reterminal-e1001/dejavusans.ttf"
+    id: font_zodiac
+    size: 170
+    glyphs: ["♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓"]
+
   # tiny: graph axis/tick labels and analog captions
   - file: "gfonts://Inter@500"
     id: font_tiny
@@ -21,6 +29,25 @@ font:
   - file: "gfonts://Inter@700"
     id: font_smallb
     size: 20
+    glyphs: *glyphs
+  # Status Bar Font Size ladder. Baked bitmaps cannot be scaled at runtime,
+  # so every size the setting offers is a compiled face; font_smallb above
+  # is the ladder's first rung (20 px, the default).
+  - file: "gfonts://Inter@700"
+    id: font_bar25
+    size: 25
+    glyphs: *glyphs
+  - file: "gfonts://Inter@700"
+    id: font_bar30
+    size: 30
+    glyphs: *glyphs
+  - file: "gfonts://Inter@700"
+    id: font_bar35
+    size: 35
+    glyphs: *glyphs
+  - file: "gfonts://Inter@700"
+    id: font_bar40
+    size: 40
     glyphs: *glyphs
   - file: "gfonts://Inter@500"
     id: font_medium
@@ -53,6 +80,22 @@ font:
   - file: "reterminal-e1001/vazirmatn.ttf"
     id: fa_smallb
     size: 20
+    glyphs: *fa_glyphs
+  - file: "reterminal-e1001/vazirmatn.ttf"
+    id: fa_bar25
+    size: 25
+    glyphs: *fa_glyphs
+  - file: "reterminal-e1001/vazirmatn.ttf"
+    id: fa_bar30
+    size: 30
+    glyphs: *fa_glyphs
+  - file: "reterminal-e1001/vazirmatn.ttf"
+    id: fa_bar35
+    size: 35
+    glyphs: *fa_glyphs
+  - file: "reterminal-e1001/vazirmatn.ttf"
+    id: fa_bar40
+    size: 40
     glyphs: *fa_glyphs
   - file: "reterminal-e1001/vazirmatn.ttf"
     id: fa_medium

@@ -38,6 +38,9 @@ interval:
               # an unprovisioned device must stay awake, or its hotspot and
               # Improv would vanish before credentials can be entered
               - lambda: 'return esphome::wifi::global_wifi_component->has_sta();'
+              # a debug session is meant to be watched: it holds the device
+              # up so its live rows keep moving
+              - lambda: 'return !reterminal::debug_hold();'
               - lambda: 'return reterminal::sleep_due();'
               - not:
                   script.is_running: boot_flow
@@ -68,6 +71,14 @@ interval:
             - deep_sleep.enter:
                 id: deep_sleep_1
                 sleep_duration: !lambda 'return (uint32_t) reterminal::sleep_minutes() * 60000;'
+      # The debug session ran out: hand the radio back and show the page it
+      # was covering
+      - if:
+          condition:
+            lambda: 'return reterminal::debug_expired();'
+          then:
+            - script.execute: debug_end
+            - component.update: epaper_display
       # Held awake past the refresh interval: redraw so the clocks stay
       # current (never reached in normal wake-sleep cycles)
       - if:
@@ -122,29 +133,55 @@ script:
             std::string k = kv.substr(0, eq), v = kv.substr(eq + 1);
             esphome::text::Text *zones_t[5] = {id(zone_1), id(zone_2), id(zone_3),
                                                id(zone_4), id(zone_5)};
-            esphome::switch_::Switch *shows[7] = {id(show_page1), id(show_page2),
-                                                  id(show_page3), id(show_page4),
-                                                  id(show_page5), id(show_page6),
-                                                  id(show_page7)};
+            esphome::switch_::Switch *shows[10] = {id(show_page1), id(show_page2),
+                                                   id(show_page3), id(show_page4),
+                                                   id(show_page5), id(show_page6),
+                                                   id(show_page7), id(show_page8),
+                                                   id(show_page9), id(show_page10)};
             esphome::text::Text *cols_t[3] = {id(col_1), id(col_2), id(col_3)};
-            if (k.size() == 5 && k.rfind("zone", 0) == 0 && k[4] >= '1' && k[4] <= '5') {
+            // Every plain text and every switch HA exposes, keyed the same
+            // way the SD/remote config emits them: one row per setting is
+            // the only thing keeping the two surfaces in step.
+            const struct { const char *k; esphome::text::Text *t; } texts[] = {
+              {"barskip", id(bar_skip)}, {"home", id(home_zone_t)},
+              {"haurl", id(ha_url)}, {"hatoken", id(ha_token)},
+              {"cfgurl", id(config_url)}};
+            const struct { const char *k; esphome::switch_::Switch *sw; } flags[] = {
+              {"cycle", id(auto_cycle)}, {"radio", id(radio_sw)},
+              {"barjalali", id(bar_jalali)}, {"barhijri", id(bar_hijri)},
+              {"barclimate", id(bar_climate)},
+              {"battbar", id(batt_bar)}, {"photos", id(dial_photos)},
+              {"nightmode", id(night_mode)}, {"offsets", id(analog_offsets)},
+              {"labelsin", id(analog_inside)},
+              {"zen1", id(zone1_en)}, {"zen2", id(zone2_en)}, {"zen3", id(zone3_en)},
+              {"zen4", id(zone4_en)}, {"zen5", id(zone5_en)}};
+            esphome::text::Text *text_e = nullptr;
+            for (auto &t : texts)
+              if (k == t.k) { text_e = t.t; break; }
+            esphome::switch_::Switch *flag_e = nullptr;
+            for (auto &f : flags)
+              if (k == f.k) { flag_e = f.sw; break; }
+            if (text_e != nullptr) {
+              text_e->make_call().set_value(v).perform();
+            } else if (flag_e != nullptr) {
+              if (v == "on") flag_e->turn_on();
+              else flag_e->turn_off();
+            } else if (k.size() == 5 && k.rfind("zone", 0) == 0 && k[4] >= '1' && k[4] <= '5') {
               zones_t[k[4] - '1']->make_call().set_value(v).perform();
             } else if (k.size() == 4 && k.rfind("col", 0) == 0 && k[3] >= '1' && k[3] <= '3') {
               cols_t[k[3] - '1']->make_call().set_value(v).perform();
             } else if (k == "lang") {
               id(ui_lang).make_call().set_option(v).perform();
-            } else if (k == "barskip") {
-              id(bar_skip).make_call().set_value(v).perform();
             } else if (k == "sync") {
               id(sync_interval).make_call().set_value(atoi(v.c_str())).perform();
             } else if (k == "refresh") {
               id(refresh_interval).make_call().set_value(atoi(v.c_str())).perform();
             } else if (k == "nrefresh") {
               id(night_refresh).make_call().set_value(atoi(v.c_str())).perform();
-            } else if (k == "home") {
-              id(home_zone_t).make_call().set_value(v).perform();
             } else if (k == "days") {
               id(combo_days).make_call().set_value(atoi(v.c_str())).perform();
+            } else if (k == "barfont") {
+              id(bar_font_size).make_call().set_value(atoi(v.c_str())).perform();
             } else if (k == "night") {
               int f, t;
               if (sscanf(v.c_str(), "%d-%d", &f, &t) == 2) {
@@ -155,12 +192,12 @@ script:
               }
             } else if (k == "start") {
               id(start_page).make_call().set_value(atoi(v.c_str())).perform();
-            } else if (k.size() == 5 && k.rfind("show", 0) == 0 && k[4] >= '1' && k[4] <= '7') {
-              if (v == "on") shows[k[4] - '1']->turn_on();
-              else shows[k[4] - '1']->turn_off();
-            } else if (k == "cycle") {
-              if (v == "on") id(auto_cycle).turn_on();
-              else id(auto_cycle).turn_off();
+            } else if (k.rfind("show", 0) == 0 &&
+                       atoi(k.c_str() + 4) >= 1 &&
+                       atoi(k.c_str() + 4) <= reterminal::PAGE_COUNT) {
+              int pi = atoi(k.c_str() + 4) - 1;
+              if (v == "on") shows[pi]->turn_on();
+              else shows[pi]->turn_off();
             } else {
               ESP_LOGW("reterminal", "apply: unknown key '%s'", k.c_str());
             }
@@ -268,14 +305,42 @@ script:
                 then:
                   - script.execute: beep_err
 
+  # Debug is a diagnostic session: the radio comes up (past a strike-out
+  # too, or the page would just report "gave up") and sleep is held off so
+  # the network, heap and uptime rows stay live while being read.
+  - id: debug_start
+    mode: single
+    then:
+      - lambda: |-
+          reterminal::debug_open();
+          reterminal::wifi_fail_wakes = 0;
+          reterminal::radio_on = true;
+          reterminal::bump_interact();
+      - wifi.enable:
+
+  # Leaves the persisted Radio switch as the user set it: the session only
+  # borrowed the radio.
+  - id: debug_end
+    mode: single
+    then:
+      - lambda: |-
+          reterminal::debug_close();
+          reterminal::radio_on = id(radio_sw).state;
+          reterminal::bump_interact();
+      - if:
+          condition:
+            lambda: 'return !reterminal::radio_on;'
+          then:
+            - wifi.disable:
+
   - id: page_prev
     mode: single
     then:
       - script.execute: beep_short
       # the debug overlay swallows the first flip: back to the page under it
       - lambda: |-
-          if (reterminal::debug_page)
-            reterminal::debug_page = false;
+          if (reterminal::debug_active())
+            reterminal::debug_close();
           else
             reterminal::prev_page();
       - component.update: epaper_display
@@ -293,8 +358,8 @@ script:
       - script.execute: beep_short
       # the debug overlay swallows the first flip: back to the page under it
       - lambda: |-
-          if (reterminal::debug_page)
-            reterminal::debug_page = false;
+          if (reterminal::debug_active())
+            reterminal::debug_close();
           else
             reterminal::next_page();
       - component.update: epaper_display
@@ -476,7 +541,13 @@ script:
                 then:
                   - script.execute: net_refresh
                 else:
-                  - component.update: epaper_display
+                  # a latched-empty pack keeps the Charge! frame it already
+                  # painted: repainting only risks a half-drawn one
+                  - if:
+                      condition:
+                        lambda: 'return !reterminal::charge_hold();'
+                      then:
+                        - component.update: epaper_display
                   - lambda: 'reterminal::bump_awake();'
       # Reaching the end of a boot confirms a freshly flashed firmware
       - lambda: 'reterminal::rollback_confirm();'
@@ -530,9 +601,13 @@ binary_sensor:
                 lambda: 'return millis() > 2000;'
               then:
                 - script.execute: beep_short
-                - lambda: |-
-                    reterminal::debug_page = !reterminal::debug_page;
-                    reterminal::bump_interact();
+                - if:
+                    condition:
+                      lambda: 'return reterminal::debug_active();'
+                    then:
+                      - script.execute: debug_end
+                    else:
+                      - script.execute: debug_start
                 - component.update: epaper_display
       - timing:
           - ON for at least 1s
@@ -635,12 +710,17 @@ display:
                  lang::L().open_url);
         return;
       }
-      if (reterminal::debug_page) {
+      if (reterminal::debug_active()) {
         reterminal::draw_debug(it, id(battery_voltage).state, id(battery_level).state,
                                id(sd_card_detect).state, id(config_url).state.c_str());
         return;
       }
-      switch (reterminal::page) {
+      // A latched-empty pack takes over whatever page is current, and the
+      // takeover is what the panel keeps once the device stops waking
+      int shown = reterminal::battery_critical ? reterminal::CHARGE_PAGE : reterminal::page;
+      if (reterminal::battery_critical)
+        reterminal::charge_drawn = true;
+      switch (shown) {
         case 0:
           reterminal::draw_analog_clocks(it, id(analog_offsets).state,
                                          id(analog_inside).state, id(dial_photos).state,
@@ -667,19 +747,30 @@ display:
         case 7:
           reterminal::draw_khayyam(it, id(font_fa_title), id(font_fa_body));
           break;
+        case 8:
+          reterminal::draw_calendar(it, id(font_zodiac));
+          break;
+        case 9:
+          reterminal::draw_charge(it);
+          break;
       }
-      if (reterminal::bar_on_[reterminal::page])
+      if (reterminal::bar_on_[shown])
         reterminal::draw_status_bar(it, id(battery_level).state,
                                     id(temp_sensor).state, id(hum_sensor).state,
                                     id(bar_climate).state, id(sd_card_detect).state,
                                     id(bar_jalali).state, id(bar_hijri).state,
-                                    id(sleep_pause).state || id(keep_awake).state);
+                                    id(sleep_pause).state || id(keep_awake).state,
+                                    id(batt_bar).state);
       // optional hairline battery gauge: vertical on the right edge like a
       // standing battery — filled from the bottom up, inset 2 px for the
-      // enclosure bezel, ending above the status bar on pages that show it
+      // enclosure bezel, ending above the status bar on pages that show it.
+      // It thickens at each low-battery tier, so a draining pack is visible
+      // from across the room without reading anything.
       if (id(batt_bar).state && !std::isnan(id(battery_level).state)) {
-        int span = reterminal::bar_on_[reterminal::page] ? 442 : 476;
+        int span = (reterminal::bar_on_[shown] ? reterminal::bar_top()
+                                               : reterminal::SCREEN_H) - 4;
         int h = (int) (id(battery_level).state * span / 100.0f);
+        int w = 2 + 2 * reterminal::batt_tier(id(battery_voltage).state);
         if (h > 0)
-          it.filled_rectangle(lang::rtl() ? 2 : 796, 2 + span - h, 2, h);
+          it.filled_rectangle(lang::rtl() ? 2 : 798 - w, 2 + span - h, w, h);
       }

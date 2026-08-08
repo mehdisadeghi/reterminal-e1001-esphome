@@ -74,6 +74,10 @@ esphome:
             reterminal::register_fonts(1, id(fa_tiny), id(fa_small), id(fa_smallb),
                                        id(fa_medium), id(fa_large), id(fa_time),
                                        id(fa_huge));
+            reterminal::register_bar_fonts(0, id(font_smallb), id(font_bar25), id(font_bar30),
+                                           id(font_bar35), id(font_bar40));
+            reterminal::register_bar_fonts(1, id(fa_smallb), id(fa_bar25), id(fa_bar30),
+                                           id(fa_bar35), id(fa_bar40));
             reterminal::lang_apply(id(ui_lang).current_option().c_str());
             reterminal::radio_on = id(radio_sw).state;
             // A frozen chip (STOP set, dead cell) can report stale time as
@@ -109,6 +113,11 @@ esphome:
             pe[5] = id(show_page6).state;
             pe[6] = id(show_page7).state;
             pe[7] = id(show_page8).state;
+            pe[8] = id(show_page9).state;
+            pe[9] = id(show_page10).state;
+            reterminal::battery_check(id(battery_voltage).state);
+            if (id(bar_font_size).state >= reterminal::BAR_FONT_MIN)
+              reterminal::bar_font_px = (int) id(bar_font_size).state;
             reterminal::set_bar_skip(id(bar_skip).state.c_str());
             reterminal::rebuild_zones(
                 id(zone1_en).state ? id(zone_1).state.c_str() : "",

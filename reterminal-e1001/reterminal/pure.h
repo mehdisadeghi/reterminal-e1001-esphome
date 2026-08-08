@@ -28,11 +28,32 @@ namespace reterminal {
 
 static const char *const TAG = "reterminal";
 
-constexpr int PAGE_COUNT = 8;  // clock, numbers, temp, hum, week, analog, noqte, khayyam
+// analog, clock, numbers, temp, hum, week, noqte, khayyam, calendar, charge
+constexpr int PAGE_COUNT = 10;
 constexpr int POINTS = 192;    // buckets per window
 constexpr time_t SPAN = 24 * 3600;
 constexpr time_t FETCH_INTERVAL = 3 * 3600;
 constexpr time_t MIN_VALID_EPOCH = 1600000000;  // clock has been synced at least once
+
+// --- Battery thresholds ------------------------------------------------------
+// On raw pack voltage, not the percentage: that curve is an uncalibrated
+// guess, while volts are what the ADC actually measures. The last tier
+// leaves headroom above the 3.27 V floor for one full ePaper refresh —
+// a refresh started below that can leave a half-drawn frame on the panel.
+
+constexpr float BATT_TIER_V[3] = {3.58f, 3.49f, 3.41f};
+constexpr float BATT_CRITICAL_V = 3.35f;
+constexpr float BATT_RECOVER_V = 3.70f;
+
+// 0 = healthy, 3 = nearly empty. The battery hairline thickens with it.
+inline int batt_tier(float volts) {
+  if (std::isnan(volts))
+    return 0;
+  for (int i = 2; i >= 0; i--)
+    if (volts <= BATT_TIER_V[i])
+      return i + 1;
+  return 0;
+}
 
 // --- Climate columns: sources are data, not code -----------------------------
 // Column spec: "Label=dev" (onboard SHT4x) or

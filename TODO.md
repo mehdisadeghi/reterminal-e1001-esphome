@@ -94,6 +94,14 @@
 - [ ] Decide fate of the single 24 h pages (Show switches can hide them
       meanwhile); remove the noqte test page when done evaluating
 - [ ] Check/insert the CR1220 RTC backup cell (RTC! warning / STOP flag)
+- [ ] Battery end-of-life screen: below the lowest threshold the final
+      update paints a large empty-battery glyph plus "Charge!" (localized,
+      fa too), so a dead device shows why it stopped. Before that, thicken
+      the battery column at successive thresholds so the drain is visible
+- [ ] Accessibility: Large Status Bar option (twice the height, fonts
+      scaled to match). Requires a real layout grid — status bar row plus
+      content row, pages laid out inside the content row — so toggling the
+      option pushes page content down instead of overlapping the bar
 - [ ] Optional: sleep-proof remote navigation via a retained HA select
 - [ ] Optional: remote firmware update over HTTPS (esp_https_ota into the
       passive slot, guarded by the existing rollback counter)

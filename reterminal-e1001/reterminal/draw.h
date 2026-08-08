@@ -40,6 +40,25 @@ inline void register_fonts(int li, BaseFont *tiny, BaseFont *small_f, BaseFont *
     fonts_[li][i] = set[i];
 }
 
+// The status bar is the one surface whose type size is a user setting, so
+// its faces are a ladder rather than a role: BAR_FONT_MIN plus a step per
+// entry, matching the range the HA number offers. Baked bitmaps cannot be
+// scaled, which is why the ladder exists at all.
+constexpr int BAR_STEPS = (BAR_FONT_MAX - BAR_FONT_MIN) / BAR_FONT_STEP + 1;
+static BaseFont *bar_fonts_[lang::LANG_COUNT][BAR_STEPS];
+
+inline void register_bar_fonts(int li, BaseFont *f20, BaseFont *f25, BaseFont *f30,
+                               BaseFont *f35, BaseFont *f40) {
+  BaseFont *set[BAR_STEPS] = {f20, f25, f30, f35, f40};
+  for (int i = 0; i < BAR_STEPS; i++)
+    bar_fonts_[li][i] = set[i];
+}
+
+inline BaseFont *bar_font() {
+  int i = (bar_font_px - BAR_FONT_MIN) / BAR_FONT_STEP;
+  return bar_fonts_[lang::lang_idx][std::min(std::max(i, 0), BAR_STEPS - 1)];
+}
+
 inline void lang_apply(const char *code) { lang::lang_idx = lang::lang_index(code); }
 
 // Runtime labels may be in another script than the UI language: an English
@@ -110,8 +129,11 @@ inline void draw_world_clock(Display &it) {
   bool has_home = home_zone >= 0 && home_zone < zone_count;
   // without a home zone nothing is inverted and offsets are vs. UTC
   int base_off = has_home ? zone_offset_min(zones[home_zone], now) : 0;
-  const int RH = 76;
-  int y = 58 + (MAX_ZONES - zone_count) * (RH / 2);  // vertically centered
+  // rows keep their designed height while the content row can hold five of
+  // them, and give it up only when a taller status bar leaves less
+  const int TOP = 58;
+  int RH = std::min(76, (content_bottom(page) - TOP) / MAX_ZONES);
+  int y = TOP + (MAX_ZONES - zone_count) * (RH / 2);  // vertically centered
   for (int zi = 0; zi < zone_count; zi++) {
     const Zone &z = zones[zi];
     int off = zone_offset_min(z, now);
@@ -147,88 +169,164 @@ inline void draw_world_clock(Display &it) {
   }
 }
 
-inline void draw_sd_icon(Display &it, int x, int y) {
+// Both status-bar icons are drawn from the same small integer grid times s.
+// The extra passes offset by one pixel thicken every stroke, diagonals and
+// arcs included, so a doubled bar does not leave them spindly.
+inline void draw_sd_icon(Display &it, int x, int y, int s) {
   auto c = esphome::display::COLOR_OFF;
-  it.line(x + 3, y, x + 9, y, c);  // top edge, shortened by the corner notch
-  it.line(x + 9, y, x + 9, y + 13, c);
-  it.line(x, y + 13, x + 9, y + 13, c);
-  it.line(x, y + 3, x, y + 13, c);
-  it.line(x, y + 3, x + 3, y, c);
-  for (int px = x + 2; px <= x + 8; px += 2)
-    it.line(px, y + 2, px, y + 4, c);
+  for (int t = 0; t < s; t++) {
+    int ox = x + t, oy = y + t;
+    it.line(ox + 3 * s, oy, ox + 9 * s, oy, c);  // top edge, cut by the corner notch
+    it.line(ox + 9 * s, oy, ox + 9 * s, oy + 13 * s, c);
+    it.line(ox, oy + 13 * s, ox + 9 * s, oy + 13 * s, c);
+    it.line(ox, oy + 3 * s, ox, oy + 13 * s, c);
+    it.line(ox, oy + 3 * s, ox + 3 * s, oy, c);
+  }
+  for (int px = x + 2 * s; px <= x + 8 * s; px += 2 * s)
+    it.line(px, y + 2 * s, px, y + 4 * s, c);
 }
 
 // Lit bulb = the device is held awake (Pause Deep Sleep or keep-awake helper)
-inline void draw_awake_icon(Display &it, int x, int y) {
+inline void draw_awake_icon(Display &it, int x, int y, int s) {
   auto c = esphome::display::COLOR_OFF;
-  it.line(x + 5, y, x + 5, y + 1, c);  // rays
-  it.line(x, y + 2, x + 1, y + 3, c);
-  it.line(x + 9, y + 3, x + 10, y + 2, c);
-  it.circle(x + 5, y + 8, 4, c);  // glass
-  it.line(x + 3, y + 14, x + 7, y + 14, c);  // base
-  it.line(x + 3, y + 16, x + 7, y + 16, c);
+  for (int t = 0; t < s; t++) {
+    int ox = x + t, oy = y + t;
+    it.line(ox + 5 * s, oy, ox + 5 * s, oy + 1 * s, c);  // rays
+    it.line(ox, oy + 2 * s, ox + 1 * s, oy + 3 * s, c);
+    it.line(ox + 9 * s, oy + 3 * s, ox + 10 * s, oy + 2 * s, c);
+    it.circle(x + 5 * s, y + 8 * s, 4 * s - t, c);  // glass
+    it.line(ox + 3 * s, oy + 14 * s, ox + 7 * s, oy + 14 * s, c);  // base
+    it.line(ox + 3 * s, oy + 16 * s, ox + 7 * s, oy + 16 * s, c);
+  }
 }
 
-// Bottom status bar, inverted. Left: Solar Hijri and/or Lunar Hijri date;
-// center: Gregorian date; right, growing leftwards: battery, awake bulb,
-// SD-card icon, RTC warning, device climate.
+// Bottom status bar, inverted. Start side: the weekday, then the enabled
+// calendars as one box (Solar Hijri, Lunar Hijri, Gregorian last, always
+// on); end side, growing inward: battery, awake bulb, SD-card icon, RTC
+// warning, device climate.
+//
+// Nothing here is sized by hand. Both groups are measured at whatever face
+// the user chose, and while the row cannot hold them the lowest-value items
+// give way in turn — the battery percentage, climate, the RTC warning, the
+// two icons, then the optional calendars. Weekday and Gregorian date always
+// survive. So a larger type size costs detail rather than producing overlap
+// or text running off the panel.
+//
+// The percentage leads that list only when the hairline gauge is on, since
+// the edge already carries the same reading; without the gauge it is the
+// only battery indication there is and it stays.
 inline void draw_status_bar(Display &it, float battery_pct, float dev_t, float dev_h,
                             bool show_climate, bool sd_present, bool show_jalali,
-                            bool show_lunar, bool awake_hold) {
-  BaseFont *small_f = lfont(F_SMALLB);
-  it.filled_rectangle(0, 446, 800, 34);
+                            bool show_lunar, bool awake_hold, bool batt_gauge) {
+  BaseFont *small_f = bar_font();
+  int s = bar_scale(), by0 = bar_top(), base = bar_mid();
+  it.filled_rectangle(0, by0, 800, bar_h());
   time_t now = ::time(nullptr);
-  // shaped Persian dates run ~60 bytes (presentation forms are 3-byte UTF-8)
-  char buf[96];
   auto astart = ma(TextAlign::CENTER_LEFT);
   auto aend = ma(TextAlign::CENTER_RIGHT);
   int dir = lang::rtl() ? -1 : 1;
+  int margin = bar_px(20), gap = bar_px(24);
+  auto text_w = [&](const char *t) {
+    int bx, by, bw, bh;
+    it.get_text_bounds(0, base, t, small_f, astart, &bx, &by, &bw, &bh);
+    return bw;
+  };
+
+  // shaped Persian dates run ~60 bytes (presentation forms are 3-byte UTF-8)
+  char dates[4][96], climate[96], batt[96];
+  bool on_jalali = false, on_lunar = false;
+  int n_dates = 0, i_jalali = -1, i_lunar = -1;
   if (now > MIN_VALID_EPOCH) {
     struct tm lt;
     localtime_r(&now, &lt);
-    int lx = mx(20);
+    snprintf(dates[n_dates++], sizeof(dates[0]), "%s", lang::L().weekdays[lt.tm_wday]);
     if (show_jalali) {
       int jy, jm, jd;
       jalali::from_gregorian(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, jy, jm, jd);
-      lang::d_m_y(buf, sizeof(buf), jd, lang::jalali_month(jm - 1), jy);
-      it.print(lx, 463, small_f, esphome::display::COLOR_OFF, astart, buf);
-      int bx, by, bw, bh;
-      it.get_text_bounds(lx, 463, buf, small_f, astart, &bx, &by, &bw, &bh);
-      lx += dir * (bw + 24);
+      i_jalali = n_dates;
+      on_jalali = true;
+      lang::d_m_y(dates[n_dates++], sizeof(dates[0]), jd, lang::jalali_month(jm - 1), jy);
     }
     if (show_lunar) {
       int hy, hm, hd;
       hijri::from_gregorian(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, hy, hm, hd);
-      lang::d_m_y(buf, sizeof(buf), hd, lang::hijri_month(hm - 1), hy);
-      it.print(lx, 463, small_f, esphome::display::COLOR_OFF, astart, buf);
+      i_lunar = n_dates;
+      on_lunar = true;
+      lang::d_m_y(dates[n_dates++], sizeof(dates[0]), hd, lang::hijri_month(hm - 1), hy);
     }
-    lang::date_long(buf, sizeof(buf), lt.tm_wday, lt.tm_mday, lt.tm_mon, lt.tm_year + 1900);
-    it.print(400, 463, small_f, esphome::display::COLOR_OFF, TextAlign::CENTER, buf);
+    lang::d_m_y(dates[n_dates++], sizeof(dates[0]), lt.tm_mday, lang::L().months[lt.tm_mon],
+                lt.tm_year + 1900);
   }
-  int x = mx(780);
-  if (!std::isnan(battery_pct)) {
+
+  bool on_batt = !std::isnan(battery_pct);
+  bool on_bulb = awake_hold, on_sd = sd_present, on_rtc = rtc_bad;
+  bool on_climate = show_climate && !std::isnan(dev_t) && !std::isnan(dev_h);
+  if (on_batt) {
     char pct[8];
     snprintf(pct, sizeof(pct), "%.0f", battery_pct);
-    lang::percent(buf, sizeof(buf), pct);
-    it.print(x, 463, small_f, esphome::display::COLOR_OFF, aend, buf);
-    x -= dir * 58;
+    lang::percent(batt, sizeof(batt), pct);
   }
-  if (awake_hold) {
-    draw_awake_icon(it, lang::rtl() ? x : x - 11, 451);
-    x -= dir * 24;
+  if (on_climate)
+    lang::climate(climate, sizeof(climate), dev_t, dev_h);
+
+  // Advances, not glyph widths: each carries the spacing that follows it.
+  auto row_w = [&]() {
+    int w = 0, shown = 0;
+    for (int i = 0; i < n_dates; i++) {
+      if ((i == i_jalali && !on_jalali) || (i == i_lunar && !on_lunar))
+        continue;
+      w += text_w(dates[i]);
+      shown++;
+    }
+    if (shown > 1)
+      w += gap * (shown - 1);
+    if (on_batt)
+      w += bar_px(58);
+    if (on_bulb)
+      w += bar_px(24);
+    if (on_sd)
+      w += bar_px(22);
+    if (on_rtc)
+      w += bar_px(54);
+    if (on_climate)
+      w += text_w(climate) + gap;
+    return w;
+  };
+  bool *give_way[] = {&on_batt,   &on_climate, &on_rtc,   &on_sd,
+                      &on_bulb,   &on_lunar,   &on_jalali};
+  int room = 800 - 2 * margin;
+  for (int i = batt_gauge ? 0 : 1; i < (int) (sizeof(give_way) / sizeof(*give_way)); i++) {
+    if (row_w() <= room)
+      break;
+    *give_way[i] = false;
   }
-  if (sd_present) {
-    draw_sd_icon(it, lang::rtl() ? x : x - 10, 456);
-    x -= dir * 22;
+
+  int lx = mx(margin);
+  for (int i = 0; i < n_dates; i++) {
+    if ((i == i_jalali && !on_jalali) || (i == i_lunar && !on_lunar))
+      continue;
+    it.print(lx, base, small_f, esphome::display::COLOR_OFF, astart, dates[i]);
+    lx += dir * (text_w(dates[i]) + gap);
   }
-  if (rtc_bad) {
-    it.print(x, 463, small_f, esphome::display::COLOR_OFF, aend, "RTC!");
-    x -= dir * 54;
+  int x = mx(800 - margin);
+  if (on_batt) {
+    it.print(x, base, small_f, esphome::display::COLOR_OFF, aend, batt);
+    x -= dir * bar_px(58);
   }
-  if (show_climate && !std::isnan(dev_t) && !std::isnan(dev_h)) {
-    lang::climate(buf, sizeof(buf), dev_t, dev_h);
-    it.print(x, 463, small_f, esphome::display::COLOR_OFF, aend, buf);
+  if (on_bulb) {
+    draw_awake_icon(it, lang::rtl() ? x : x - 11 * s, by0 + 5 * s, s);
+    x -= dir * bar_px(24);
   }
+  if (on_sd) {
+    draw_sd_icon(it, lang::rtl() ? x : x - 10 * s, by0 + 10 * s, s);
+    x -= dir * bar_px(22);
+  }
+  if (on_rtc) {
+    it.print(x, base, small_f, esphome::display::COLOR_OFF, aend, "RTC!");
+    x -= dir * bar_px(54);
+  }
+  if (on_climate)
+    it.print(x, base, small_f, esphome::display::COLOR_OFF, aend, climate);
 }
 
 inline void draw_numbers(Display &it) {
@@ -458,7 +556,10 @@ inline void draw_graph_page(Display &it, int metric) {
   if (no_cols(it))
     return;
   draw_legend(it, tiny_f, 784, 10);
-  draw_graph_band(it, series_day, metric, fetch_time, SPAN, med, tiny_f, 48, 420, true);
+  // the band stops short of the content row's floor by the day axis it
+  // prints underneath itself, and never grows past its tuned depth
+  draw_graph_band(it, series_day, metric, fetch_time, SPAN, med, tiny_f, 48,
+                  std::min(420, content_bottom(page) - 26), true);
 }
 
 // Combined page over week_days: temperature and humidity stacked, one
@@ -480,16 +581,23 @@ inline void draw_week_page(Display &it) {
     int y0, y1;
   } BANDS[2] = {{M_TEMP, "TEMP", 30, 202}, {M_HUM, "HUM", 240, 414}};
 
+  // The stack below is authored against the normal content row; gy maps it
+  // into whatever the row actually offers, and is the identity there.
+  const int Y0 = 30, AUTHORED = 384;  // 30..414, with the day axis just below
+  int have = std::min(AUTHORED, content_bottom(page) - 32 - Y0);
+  auto gy = [&](int y) { return Y0 + (y - Y0) * have / AUTHORED; };
+
   for (const auto &band : BANDS) {
-    it.filled_rectangle(0, band.y0, 32, band.y1 - band.y0);
+    int y0 = gy(band.y0), y1 = gy(band.y1);
+    it.filled_rectangle(0, y0, 32, y1 - y0);
     int nt = (int) strlen(band.tag);
-    int ty = (band.y0 + band.y1) / 2 - nt * 15;
+    int ty = (y0 + y1) / 2 - nt * 15;
     for (int i = 0; i < nt; i++) {
       char ch[2] = {band.tag[i], 0};
       it.print(16, ty + i * 30, small_f, esphome::display::COLOR_OFF, TextAlign::TOP_CENTER, ch);
     }
     draw_graph_band(it, series_week, band.metric, week_fetch_time, week_span(), med, tiny_f,
-                    band.y0, band.y1, false);
+                    y0, y1, false);
   }
 
   // day labels centered per day, once, under the bottom band; weekday names
@@ -509,7 +617,7 @@ inline void draw_week_page(Display &it) {
       gmtime_r(&center, &dt);
       char day[8];
       strftime(day, sizeof(day), week_days > 7 ? "%d" : "%a", &dt);
-      it.print(x, 424, tiny_f, TextAlign::TOP_CENTER, day);
+      it.print(x, gy(424), tiny_f, TextAlign::TOP_CENTER, day);
     }
   }
 }
@@ -555,7 +663,7 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
   const int TOP = 6, GAP = 6, EDGE = 8, EDGE_R = 12, MINSP = 12;
   int rows = SHAPE[zone_count - 1].rows;
   int r1 = SHAPE[zone_count - 1].r1;
-  int avail = (bar_on_[page] ? 446 : 474) - TOP;
+  int avail = content_bottom(page) - TOP;
   const int W = 800 - EDGE - EDGE_R;
 
   auto measure_cap = [&](int role) {
@@ -782,11 +890,92 @@ inline void draw_analog_clocks(Display &it, bool show_offsets, bool labels_insid
   }
 }
 
+// Calendar page: today in all three calendars plus the zodiac sign, big
+// type, no time — nothing on it changes within a day, so the sleep model
+// stretches to local midnight while it is shown. Fully localized: names,
+// digits, and word order follow the language pack.
+inline void draw_calendar(Display &it, BaseFont *zodiac_f) {
+  time_t now = ::time(nullptr);
+  BaseFont *med = lfont(F_MEDIUM);
+  if (now < MIN_VALID_EPOCH) {
+    it.print(400, 220, med, TextAlign::CENTER, lang::L().wait_sync);
+    return;
+  }
+  struct tm lt;
+  time_t local = home_local(now);
+  gmtime_r(&local, &lt);
+  int jy, jm, jd, hy, hm, hd;
+  jalali::from_gregorian(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, jy, jm, jd);
+  bool exact = hijri::from_gregorian(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, hy, hm, hd);
+  // dates take the reading-side two thirds, the zodiac the other third
+  int dx = lang::rtl() ? 533 : 267;
+  int zx = lang::rtl() ? 133 : 666;
+  it.print(dx, 24, lfont(F_LARGE), TextAlign::TOP_CENTER, lang::L().wdays_full[lt.tm_wday]);
+  // Jalali carries the page; Gregorian and Lunar Hijri follow. Day, month
+  // and year render as aligned columns sized from today's actual strings —
+  // no constant gaps, so Shahrivar costs Tir nothing.
+  struct {
+    char d[16], m[64], y[16];
+  } row[3];
+  char tmp[16];
+  auto fill = [&](int i, int day, const char *mon, int year) {
+    snprintf(tmp, sizeof(tmp), "%d", day);
+    lang::num(row[i].d, sizeof(row[i].d), tmp);
+    snprintf(row[i].m, sizeof(row[i].m), "%s", mon);
+    snprintf(tmp, sizeof(tmp), "%d", year);
+    lang::num(row[i].y, sizeof(row[i].y), tmp);
+  };
+  fill(0, jd, lang::jalali_month(jm - 1), jy);
+  fill(1, lt.tm_mday, lang::L().months_full[lt.tm_mon], lt.tm_year + 1900);
+  fill(2, hd, lang::hijri_month(hm - 1), hy);
+  BaseFont *tf = lfont(F_TIME);
+  int wd = 0, wm = 0, wy = 0;
+  for (int i = 0; i < 3; i++) {
+    int bx, by, bw, bh;
+    it.get_text_bounds(0, 0, row[i].d, tf, TextAlign::TOP_LEFT, &bx, &by, &bw, &bh);
+    wd = bw > wd ? bw : wd;
+    it.get_text_bounds(0, 0, row[i].m, tf, TextAlign::TOP_LEFT, &bx, &by, &bw, &bh);
+    wm = bw > wm ? bw : wm;
+    it.get_text_bounds(0, 0, row[i].y, tf, TextAlign::TOP_LEFT, &bx, &by, &bw, &bh);
+    wy = bw > wy ? bw : wy;
+  }
+  const int G = 28;
+  int total = wd + G + wm + G + wy;
+  int x0 = dx - total / 2;
+  static const int ROW_Y[3] = {120, 204, 288};
+  for (int i = 0; i < 3; i++) {
+    int y = ROW_Y[i];
+    if (!lang::rtl()) {  // day right-aligned (units line up), the rest left
+      it.print(x0 + wd, y, tf, TextAlign::TOP_RIGHT, row[i].d);
+      it.print(x0 + wd + G, y, tf, TextAlign::TOP_LEFT, row[i].m);
+      it.print(x0 + wd + G + wm + G, y, tf, TextAlign::TOP_LEFT, row[i].y);
+    } else {  // mirrored: day rightmost, columns grow leftward
+      it.print(x0 + total, y, tf, TextAlign::TOP_RIGHT, row[i].d);
+      it.print(x0 + total - wd - G, y, tf, TextAlign::TOP_RIGHT, row[i].m);
+      it.print(x0 + wy, y, tf, TextAlign::TOP_RIGHT, row[i].y);
+    }
+  }
+  // which lunar calendar produced that date: the exact Iranian table or
+  // the arithmetic fallback outside its window
+  it.print(dx, 366, lfont(F_TINY), TextAlign::TOP_CENTER,
+           exact ? lang::L().cal_ir : lang::L().cal_tab);
+  it.line(lang::rtl() ? 267 : 533, 40, lang::rtl() ? 267 : 533, 410);
+  // the sign is the sun's position — one sign per day, every calendar;
+  // the symbol is universal (and the column's anchor), the name localized
+  static const char *const SIGNS[12] = {"♈", "♉", "♊", "♋", "♌", "♍",
+                                        "♎", "♏", "♐", "♑", "♒", "♓"};
+  it.print(zx, 60, lfont(F_SMALL), TextAlign::TOP_CENTER, lang::L().zodiac_label);
+  it.print(zx, 210, zodiac_f, TextAlign::CENTER, SIGNS[jm - 1]);
+  it.print(zx, 316, med, TextAlign::TOP_CENTER, lang::L().zodiac[jm - 1]);
+}
+
 // Hardware/software/config snapshot, double green press. Deliberately LTR
 // and English in every language: it is a technical readout.
 inline void draw_debug(Display &it, float batt_v, float batt_pct, bool sd_present,
                        const char *cfg_url) {
-  it.print(400, 10, lfont(F_MEDIUM), TextAlign::TOP_CENTER, "Debug");
+  char title[48];
+  snprintf(title, sizeof(title), "Debug - %d min left", debug_minutes_left());
+  it.print(400, 10, lfont(F_MEDIUM), TextAlign::TOP_CENTER, title);
   it.line(20, 52, 780, 52);
   char rows[16][2][64];
   int n = 0;
@@ -863,6 +1052,32 @@ inline void draw_debug(Display &it, float batt_v, float batt_pct, bool sd_presen
   }
 }
 
+// Empty-battery screen: the frame a dead device is left holding. Drawn as
+// primitives rather than a glyph — the UI fonts are subset to the strings
+// they render and carry no battery symbol. The clock line answers the
+// question the frozen panel raises: how long has it been dead?
+inline void draw_charge(Display &it) {
+  const int W = 300, T = 8;  // T = outline weight
+  // the glyph, the word and the time share the content row from a third of
+  // the way down, so a taller status bar lifts the whole block
+  int bottom = content_bottom(CHARGE_PAGE);
+  int Y = bottom / 4, H = bottom * 5 / 16, X = 400 - W / 2;
+  for (int i = 0; i < T; i++)
+    it.rectangle(X + i, Y + i, W - 2 * i, H - 2 * i);
+  int nub_x = lang::rtl() ? X - 20 : X + W;  // terminal on the reading-end side
+  it.filled_rectangle(nub_x, Y + H / 2 - 25, 20, 50);
+  it.print(400, Y + H + 60, lfont(F_LARGE), TextAlign::TOP_CENTER, lang::L().charge);
+  time_t now = ::time(nullptr);
+  if (now > MIN_VALID_EPOCH) {
+    struct tm lt;
+    char buf[32], loc[48];
+    localtime_r(&now, &lt);
+    strftime(buf, sizeof(buf), "%H:%M", &lt);
+    lang::num(loc, sizeof(loc), buf);
+    it.print(400, Y + H + 130, lfont(F_MEDIUM), TextAlign::TOP_CENTER, loc);
+  }
+}
+
 // Random quatrain, re-picked on first use and then every few hours.
 RTC_DATA_ATTR int khayyam_idx = -1;
 RTC_DATA_ATTR time_t khayyam_at = 0;
@@ -881,10 +1096,14 @@ inline void draw_khayyam(Display &it, BaseFont *title_f, BaseFont *body_f) {
   it.print(400, 28, title_f, TextAlign::TOP_CENTER, KHAYYAM_TITLE);
   it.line(240, 118, 560, 118);
   const Quatrain &q = KHAYYAM_FA[khayyam_idx];
-  int y = 158;
+  const int TOP = 158, LINE_H = 46;  // body face plus its descender room
+  // the three gaps between the four lines share what the content row leaves
+  // under the title, never stretching past the designed leading
+  int step = std::min(76, (content_bottom(page) - TOP - LINE_H) / 3);
+  int y = TOP;
   for (int i = 0; i < 4; i++) {
     it.print(400, y, body_f, TextAlign::TOP_CENTER, q.l[i]);
-    y += 76;
+    y += step;
   }
 }
 

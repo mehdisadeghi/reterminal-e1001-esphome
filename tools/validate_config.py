@@ -21,9 +21,16 @@ import re
 import sys
 from datetime import datetime, timezone
 
-MAX_ZONES, MAX_COLS, PAGES = 5, 3, 8
+MAX_ZONES, MAX_COLS, PAGES = 5, 3, 10
 MAX_FILE = 8192  # firmware read cap
 LABEL_MAX = 15   # Zone.city / Column.label storage minus NUL
+
+# Boolean settings; one per HA switch, same names the firmware reads
+FLAGS = {"auto_cycle", "radio", "bar_solar_hijri", "bar_lunar_hijri", "bar_climate",
+         "battery_bar", "dial_photos", "night_mode", "analog_offsets",
+         "analog_labels_inside"}
+# status bar type size: only the compiled faces exist (fonts.yaml ladder)
+BAR_FONT_MIN, BAR_FONT_MAX, BAR_FONT_STEP = 20, 40, 5
 
 errors, warnings = [], []
 err = errors.append
@@ -81,6 +88,8 @@ def check_zone(z, i, tztable):
     if not isinstance(z, dict):
         err(f"{where}: object required")
         return None
+    if "enabled" in z and not isinstance(z["enabled"], bool):
+        err(f"{where}.enabled: true or false required")
     if "tz" in z:
         name = z["tz"]
         if not isinstance(name, str) or not name:
@@ -204,13 +213,26 @@ def main():
     if "bar_skip_pages" in doc:
         bp = doc["bar_skip_pages"]
         if not isinstance(bp, str) or (bp and not all(
-                len(t) == 1 and "1" <= t <= "8" for t in bp.split(","))):
-            err("bar_skip_pages: comma-separated page numbers 1..8 required, e.g. \"7,8\"")
+                t.isdigit() and 1 <= int(t) <= PAGES for t in bp.split(","))):
+            err(f"bar_skip_pages: comma-separated page numbers 1..{PAGES} required, "
+                'e.g. "7,8"')
 
-    if "ha_url" in doc and not str(doc["ha_url"]).startswith("http"):
-        err("ha_url: must start with http")
+    for key in ("ha_url", "config_url"):
+        if key in doc and not str(doc[key]).startswith("http"):
+            err(f"{key}: must start with http")
     if "ha_token" in doc and "REPLACE" in str(doc["ha_token"]):
         warn("ha_token still holds the placeholder value")
+
+    if "bar_font_size" in doc:
+        fs = doc["bar_font_size"]
+        if (not isinstance(fs, int) or not BAR_FONT_MIN <= fs <= BAR_FONT_MAX
+                or (fs - BAR_FONT_MIN) % BAR_FONT_STEP):
+            err(f"bar_font_size: one of "
+                f"{list(range(BAR_FONT_MIN, BAR_FONT_MAX + 1, BAR_FONT_STEP))} required")
+
+    for key in FLAGS:
+        if key in doc and not isinstance(doc[key], bool):
+            err(f"{key}: true or false required")
 
     if "set_time" in doc:
         try:
@@ -222,8 +244,10 @@ def main():
             err("set_time: ISO-8601 UTC timestamp required, e.g. 2026-07-15T12:00:00Z")
 
     known = {"version", "set_time", "home_zone", "zones", "columns", "ha_url", "ha_token",
+             "config_url",
              "sync_interval_min", "refresh_interval_min", "night_refresh_min", "combo_days", "start_page",
-             "night_from", "night_to", "show_pages", "bar_skip_pages", "lang"}
+             "night_from", "night_to", "show_pages", "bar_skip_pages", "lang",
+             "bar_font_size"} | FLAGS
     for key in doc:
         if key not in known:
             warn(f"unknown key '{key}' (ignored by the device)")

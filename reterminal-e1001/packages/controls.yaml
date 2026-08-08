@@ -327,6 +327,31 @@ number:
               reterminal::night_to = (int) x;
             reterminal::bump_interact();
 
+  # Accessibility: type size of the status bar, in pixels. The bar's height
+  # follows it and the pages give up the space, so nothing overlaps. Only
+  # the compiled sizes exist (see the ladder in fonts.yaml), which is what
+  # min/max/step express here. Larger sizes drop bar detail rather than
+  # overrunning the row.
+  - platform: template
+    name: "Status Bar Font Size"
+    id: bar_font_size
+    optimistic: true
+    restore_value: true
+    initial_value: 20
+    min_value: 20
+    max_value: 40
+    step: 5
+    unit_of_measurement: "px"
+    mode: box
+    entity_category: config
+    on_value:
+      then:
+        - lambda: |-
+            reterminal::bar_font_px = (int) x;
+            reterminal::bump_interact();
+            if (millis() > 8000)
+              id(epaper_display).update();
+
   # Page shown after a cold boot (reset, reflash, power loss); 1-based.
   # Values outside 1..PAGE_COUNT fall back to the first page.
   - platform: template
@@ -502,6 +527,22 @@ switch:
             reterminal::next_page();
           reterminal::bump_interact();
   - platform: template
+    name: "Show 9 Calendar"
+    id: show_page9
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[8] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[8] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+  - platform: template
     name: "Show 7 Noqte"
     id: show_page7
     optimistic: true
@@ -514,6 +555,25 @@ switch:
     on_turn_off:
       - lambda: |-
           reterminal::page_enabled_[6] = false;
+          if (reterminal::page_hidden(reterminal::page))
+            reterminal::next_page();
+          reterminal::bump_interact();
+
+  # Off by default: the empty-battery screen takes over on its own when the
+  # pack runs out. This switch only puts it in the rotation to eyeball it.
+  - platform: template
+    name: "Show 10 Battery Empty"
+    id: show_page10
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    entity_category: config
+    on_turn_on:
+      - lambda: |-
+          reterminal::page_enabled_[9] = true;
+          reterminal::bump_interact();
+    on_turn_off:
+      - lambda: |-
+          reterminal::page_enabled_[9] = false;
           if (reterminal::page_hidden(reterminal::page))
             reterminal::next_page();
           reterminal::bump_interact();
