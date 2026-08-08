@@ -30,25 +30,6 @@ font:
     id: font_smallb
     size: 20
     glyphs: *glyphs
-  # Status Bar Font Size ladder. Baked bitmaps cannot be scaled at runtime,
-  # so every size the setting offers is a compiled face; font_smallb above
-  # is the ladder's first rung (20 px, the default).
-  - file: "gfonts://Inter@700"
-    id: font_bar25
-    size: 25
-    glyphs: *glyphs
-  - file: "gfonts://Inter@700"
-    id: font_bar30
-    size: 30
-    glyphs: *glyphs
-  - file: "gfonts://Inter@700"
-    id: font_bar35
-    size: 35
-    glyphs: *glyphs
-  - file: "gfonts://Inter@700"
-    id: font_bar40
-    size: 40
-    glyphs: *glyphs
   - file: "gfonts://Inter@500"
     id: font_medium
     size: 32
@@ -80,22 +61,6 @@ font:
   - file: "reterminal-e1001/vazirmatn.ttf"
     id: fa_smallb
     size: 20
-    glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
-    id: fa_bar25
-    size: 25
-    glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
-    id: fa_bar30
-    size: 30
-    glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
-    id: fa_bar35
-    size: 35
-    glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
-    id: fa_bar40
-    size: 40
     glyphs: *fa_glyphs
   - file: "reterminal-e1001/vazirmatn.ttf"
     id: fa_medium

@@ -193,7 +193,9 @@ static bool bar_on_[PAGE_COUNT] = {true, true, true, true, true,
 
 // --- Screen grid -------------------------------------------------------------
 // Two rows: the status bar owns the bar row, the pages own the content row
-// above it. Pages size themselves from content_bottom() instead of naming
+// above it. The battery hairline is deliberately not part of this — it is
+// its own full-height column down the edge, so the bar's presence and
+// height never change the level it reads. Pages size themselves from content_bottom() instead of naming
 // the bar's edge, so a taller bar pushes their content up rather than being
 // drawn over. Every formula here reproduces the constants the layouts were
 // tuned against at the normal height, so scale 1 is pixel-identical.
@@ -201,13 +203,14 @@ constexpr int SCREEN_H = 480;
 constexpr int NO_BAR_MARGIN = 6;  // bezel breathing room where a page hides the bar
 
 // Accessibility: the bar's type size is the setting, and its height follows
-// the type rather than the other way round. Faces are baked at compile time,
-// so the sizes are a ladder (see register_bar_fonts) and BAR_FONT_STEP is
-// what the HA number steps by.
-constexpr int BAR_FONT_MIN = 20, BAR_FONT_MAX = 40, BAR_FONT_STEP = 5;
+// the type rather than the other way round. The outlines ride along and are
+// rasterized on demand (ttf_font.h), so every size in the range exists —
+// there is no ladder of baked sizes to step between.
+constexpr int BAR_FONT_REF = 20;  // the size the bar's spacing was tuned at
+constexpr int BAR_FONT_MIN = 14, BAR_FONT_MAX = 48;
 constexpr int BAR_PAD = 14;  // bar height above the type size: 34 at the default
 
-static int bar_font_px = BAR_FONT_MIN;
+static int bar_font_px = BAR_FONT_REF;
 
 inline int bar_h() { return bar_font_px + BAR_PAD; }
 inline int bar_top() { return SCREEN_H - bar_h(); }
@@ -215,8 +218,8 @@ inline int bar_mid() { return bar_top() + bar_h() / 2; }
 
 // Horizontal advances follow the type size exactly; icons can only thicken
 // in whole pixels, so they take the rounded step instead.
-inline int bar_px(int at_min) { return at_min * bar_font_px / BAR_FONT_MIN; }
-inline int bar_scale() { return (bar_font_px + BAR_FONT_MIN / 2) / BAR_FONT_MIN; }
+inline int bar_px(int at_ref) { return at_ref * bar_font_px / BAR_FONT_REF; }
+inline int bar_scale() { return (bar_font_px + BAR_FONT_REF / 2) / BAR_FONT_REF; }
 
 inline int content_bottom(int p) {
   return bar_on_[p] ? bar_top() : SCREEN_H - NO_BAR_MARGIN;

@@ -14,6 +14,7 @@
 #include "device.h"
 #include "dial_image.h"
 #include "khayyam_fa.h"
+#include "ttf_font.h"
 #include "hijri.h"
 #include "jalali.h"
 #include "lang.h"
@@ -40,23 +41,17 @@ inline void register_fonts(int li, BaseFont *tiny, BaseFont *small_f, BaseFont *
     fonts_[li][i] = set[i];
 }
 
-// The status bar is the one surface whose type size is a user setting, so
-// its faces are a ladder rather than a role: BAR_FONT_MIN plus a step per
-// entry, matching the range the HA number offers. Baked bitmaps cannot be
-// scaled, which is why the ladder exists at all.
-constexpr int BAR_STEPS = (BAR_FONT_MAX - BAR_FONT_MIN) / BAR_FONT_STEP + 1;
-static BaseFont *bar_fonts_[lang::LANG_COUNT][BAR_STEPS];
-
-inline void register_bar_fonts(int li, BaseFont *f20, BaseFont *f25, BaseFont *f30,
-                               BaseFont *f35, BaseFont *f40) {
-  BaseFont *set[BAR_STEPS] = {f20, f25, f30, f35, f40};
-  for (int i = 0; i < BAR_STEPS; i++)
-    bar_fonts_[li][i] = set[i];
-}
+// The status bar is the one surface whose type size is a user setting. Its
+// faces are outlines rasterized on demand rather than a compiled role, so
+// every size in the range exists and none of them costs flash.
+static TtfFont bar_faces_[lang::LANG_COUNT] = {TtfFont(INTER_BOLD_TTF),
+                                               TtfFont(VAZIRMATN_TTF)};
+static_assert(lang::LANG_COUNT == 2, "one status-bar face per language");
 
 inline BaseFont *bar_font() {
-  int i = (bar_font_px - BAR_FONT_MIN) / BAR_FONT_STEP;
-  return bar_fonts_[lang::lang_idx][std::min(std::max(i, 0), BAR_STEPS - 1)];
+  TtfFont &f = bar_faces_[lang::lang_idx];
+  f.set_size(bar_font_px);
+  return &f;
 }
 
 inline void lang_apply(const char *code) { lang::lang_idx = lang::lang_index(code); }

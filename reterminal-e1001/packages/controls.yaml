@@ -328,9 +328,9 @@ number:
             reterminal::bump_interact();
 
   # Accessibility: type size of the status bar, in pixels. The bar's height
-  # follows it and the pages give up the space, so nothing overlaps. Only
-  # the compiled sizes exist (see the ladder in fonts.yaml), which is what
-  # min/max/step express here. Larger sizes drop bar detail rather than
+  # follows it and the pages give up the space, so nothing overlaps. Any
+  # value in the range works — the outlines are rasterized on the device
+  # (reterminal/ttf_font.h). Larger sizes drop bar detail rather than
   # overrunning the row.
   - platform: template
     name: "Status Bar Font Size"
@@ -338,9 +338,9 @@ number:
     optimistic: true
     restore_value: true
     initial_value: 20
-    min_value: 20
-    max_value: 40
-    step: 5
+    min_value: 14
+    max_value: 48
+    step: 1
     unit_of_measurement: "px"
     mode: box
     entity_category: config

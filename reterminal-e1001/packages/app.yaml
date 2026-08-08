@@ -761,16 +761,26 @@ display:
                                     id(bar_jalali).state, id(bar_hijri).state,
                                     id(sleep_pause).state || id(keep_awake).state,
                                     id(batt_bar).state);
-      // optional hairline battery gauge: vertical on the right edge like a
-      // standing battery — filled from the bottom up, inset 2 px for the
-      // enclosure bezel, ending above the status bar on pages that show it.
-      // It thickens at each low-battery tier, so a draining pack is visible
-      // from across the room without reading anything.
+      // Optional hairline battery gauge: its own column down the full height
+      // of the panel, outside the row grid — whether the status bar shows,
+      // and how tall it is, must not change the level this reads. Filled
+      // from the bottom up, inset 2 px for the enclosure bezel, and
+      // thickening at each low-battery tier so a draining pack is visible
+      // from across the room without reading anything. Where it crosses the
+      // inverted bar it flips colour so the column stays continuous.
       if (id(batt_bar).state && !std::isnan(id(battery_level).state)) {
-        int span = (reterminal::bar_on_[shown] ? reterminal::bar_top()
-                                               : reterminal::SCREEN_H) - 4;
+        int bottom = reterminal::SCREEN_H - 2;
+        int span = bottom - 2;
         int h = (int) (id(battery_level).state * span / 100.0f);
         int w = 2 + 2 * reterminal::batt_tier(id(battery_voltage).state);
-        if (h > 0)
-          it.filled_rectangle(lang::rtl() ? 2 : 798 - w, 2 + span - h, w, h);
+        int x = lang::rtl() ? 2 : 798 - w;
+        if (h > 0) {
+          it.filled_rectangle(x, bottom - h, w, h);
+          int cross = reterminal::bar_on_[shown] ? reterminal::bar_top() : bottom;
+          if (cross < bottom - h)
+            cross = bottom - h;
+          if (cross < bottom)
+            it.filled_rectangle(x, cross, w, bottom - cross,
+                                esphome::display::COLOR_OFF);
+        }
       }

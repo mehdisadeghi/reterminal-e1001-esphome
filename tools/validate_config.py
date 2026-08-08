@@ -29,8 +29,8 @@ LABEL_MAX = 15   # Zone.city / Column.label storage minus NUL
 FLAGS = {"auto_cycle", "radio", "bar_solar_hijri", "bar_lunar_hijri", "bar_climate",
          "battery_bar", "dial_photos", "night_mode", "analog_offsets",
          "analog_labels_inside"}
-# status bar type size: only the compiled faces exist (fonts.yaml ladder)
-BAR_FONT_MIN, BAR_FONT_MAX, BAR_FONT_STEP = 20, 40, 5
+# status bar type size; rasterized on device, so any integer in range works
+BAR_FONT_MIN, BAR_FONT_MAX = 14, 48
 
 errors, warnings = [], []
 err = errors.append
@@ -225,10 +225,8 @@ def main():
 
     if "bar_font_size" in doc:
         fs = doc["bar_font_size"]
-        if (not isinstance(fs, int) or not BAR_FONT_MIN <= fs <= BAR_FONT_MAX
-                or (fs - BAR_FONT_MIN) % BAR_FONT_STEP):
-            err(f"bar_font_size: one of "
-                f"{list(range(BAR_FONT_MIN, BAR_FONT_MAX + 1, BAR_FONT_STEP))} required")
+        if not isinstance(fs, int) or not BAR_FONT_MIN <= fs <= BAR_FONT_MAX:
+            err(f"bar_font_size: integer {BAR_FONT_MIN}..{BAR_FONT_MAX} required")
 
     for key in FLAGS:
         if key in doc and not isinstance(doc[key], bool):
