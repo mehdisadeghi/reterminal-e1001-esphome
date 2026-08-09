@@ -46,6 +46,7 @@ exists.
 | `tools/validate_config.py` | Host-side `config.json` validator — mirrors the firmware's acceptance rules, cross-checks IANA names against `tzdata.csv` |
 | `tools/set_datetime.py` | Stamps a fresh one-shot `set_time` into `config.json` for air-gapped clock setting |
 | `ha-helpers.yaml` | HA package creating the three queued-control helpers (Press, Keep Awake, Config Queue) |
+| `docs/adr/` | Architecture Decision Records — why the design choices were made, and what would make us revisit them |
 | `sd-config-design.md` | Air-gapped SD-card configuration & firmware update: design + implementation notes |
 | `config.json.example` | Template for the SD `config.json` |
 | `Makefile` | `build` / `deploy` / `release` / `test` (see below) |
