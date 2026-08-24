@@ -1006,8 +1006,9 @@ inline void draw_debug(Display &it, float batt_v, float batt_pct, bool sd_presen
   } else if (w->is_connected()) {
     char ssid[esphome::wifi::SSID_BUFFER_SIZE];
     w->wifi_ssid_to(std::span<char, esphome::wifi::SSID_BUFFER_SIZE>(ssid));
-    auto ips = w->wifi_sta_ip_addresses();
-    snprintf(v, sizeof(v), "%s  %s  %d dBm", ssid, ips[0].str().c_str(), (int) w->wifi_rssi());
+    char ip[esphome::network::IP_ADDRESS_BUFFER_SIZE];
+    w->wifi_sta_ip_addresses()[0].str_to(ip);
+    snprintf(v, sizeof(v), "%s  %s  %d dBm", ssid, ip, (int) w->wifi_rssi());
     put("Wi-Fi", v);
   } else {
     put("Wi-Fi", radio_on ? "not connected" : "radio off");

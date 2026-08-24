@@ -38,7 +38,7 @@ gen-ttf:
 # secrets.yaml beside $(YAML) — its values are baked into the binary.
 # Pinned to the device builder's version; newer resolvers also reject the
 # bare Arduino library names in the yaml.
-ESPHOME_VERSION ?= 2026.7.0
+ESPHOME_VERSION ?= 2026.8.1
 build: gen-images gen-version gen-ttf
 	uvx esphome@$(ESPHOME_VERSION) compile $(YAML)
 	@echo "copy $(BIN) to the card as /firmware.bin"
