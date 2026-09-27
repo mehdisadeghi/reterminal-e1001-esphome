@@ -2,8 +2,8 @@
 
 // Photo dial faces, two optional sources with the card on top:
 //   1. /<city>.png on a mounted SD card (override)
-//   2. <city>.png beside the device yaml, baked in at build time by
-//      tools/gen_dial_images.py (dial_images.h)
+//   2. the unit config's dial_images, baked in at build time by the
+//      reterminal component (dial_images.h)
 // city = the zone's last IANA segment, lowercased (Europe/Berlin ->
 // berlin.png). Either way the face is scaled to the dial's diameter and
 // Floyd-Steinberg dithered to 1-bit at draw time, cached per (city,

@@ -10,12 +10,15 @@ repository.
 
 ## Once per installation
 
+The ESPHome Builder on the HA host builds every unit, fetching this
+repository from GitHub. Its `/config/esphome/secrets.yaml` needs the keys
+in `secrets.yaml.example` plus `wifi_ssid` and `wifi_password`.
+
+For flashing over USB from this machine, the same file locally:
+
 ```sh
 cp secrets.yaml.example secrets.yaml     # fill in; gitignored
 ```
-
-The Builder on the HA host compiles with `/config/esphome/secrets.yaml`,
-which needs the same keys.
 
 If the HA host is not `homeassistant` or your ssh user there differs
 from your local one, put them in an untracked `GNUmakefile`:
@@ -33,12 +36,6 @@ homeassistant:
   packages: !include_dir_named packages
 ```
 
-Then put the config and the shared tree into the Builder's folder:
-
-```sh
-make deploy
-```
-
 ## 1. First flash: USB
 
 A stock unit can only be flashed over USB: this build's partition table
@@ -53,9 +50,17 @@ ls /dev/cu.usbserial-*
 make flash PORT=/dev/cu.usbserial-XXXXXX
 ```
 
-Or from HA: the `reterminal-e1001` entry in the ESPHome Builder is the
-template for new units — **Install → Plug into this computer** (needs HA
-over HTTPS) or **Manual download** for ESPHome Web.
+Or without a local toolchain: in the ESPHome Builder, create a config
+that only pulls the package —
+
+```yaml
+packages:
+  reterminal: github://mehdisadeghi/reterminal-e1001-esphome/esphome-reterminal-e1001.yaml@main
+```
+
+— then **Install → Manual download** (factory format) and flash it with
+ESPHome Web, or **Plug into this computer** when HA runs over HTTPS. One
+such config serves every new unit.
 
 If no port appears or the upload cannot sync, hold the green button
 while switching power to force the ROM bootloader, and retry.
@@ -104,10 +109,17 @@ acknowledgement through it.
 ## 5. Adopt it in the ESPHome Builder
 
 While the unit is awake, the Builder lists it as **Discovered** →
-**Adopt**. The Builder writes `/config/esphome/<unit>.yaml`: a copy of
-the main config with the unit's name pinned, including the shared tree
-from `make deploy`. From then on the Builder shows the unit, its logs,
-and installs it.
+**Adopt**. The Builder writes `/config/esphome/<unit>.yaml`, which pins
+the unit's name and pulls this repository's config as a remote package.
+From then on the Builder shows the unit, its logs, and installs it.
+
+Dial photos go into that file, per unit or shared through an `!include`:
+
+```yaml
+reterminal:
+  dial_images:
+    berlin: http://homeassistant.local:8123/local/dials/berlin.png
+```
 
 ## 6. Helpers
 
@@ -127,11 +139,8 @@ battery, its helpers and its controls.
 
 ## Updates
 
-```sh
-make deploy
-```
-
-then in the ESPHome Builder, **Install** per unit or **Update All**. A
+Push to the repository; then in the ESPHome Builder, **Install** per
+unit or **Update All** — every build fetches the current source. A
 sleeping unit cannot receive an OTA: switch on its Keep Awake helper
 first (it takes effect on the unit's next HA sync, or at once with a
 green press), and off again afterwards.

@@ -1,6 +1,6 @@
 # 0008 — One config, adopted per unit in the ESPHome Builder
 
-**Status:** Accepted
+**Status:** Superseded by [0009](0009-remote-package-component.md)
 
 ## Context
 

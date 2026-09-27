@@ -1,12 +1,19 @@
 # reTerminal E1001 — core package: build inputs and boot orchestration
 # (merged by packages: in the main yaml)
 
+# The C++ behind the lambdas, as a component so a remote build can fetch
+# it (reterminal.h is the umbrella the lambdas use)
+external_components:
+  - source: ${component_source}
+    components: [reterminal]
+
+# A unit's own dial photos go under dial_images in its config, e.g.
+#   reterminal:
+#     dial_images:
+#       berlin: http://homeassistant.local:8123/local/dials/berlin.png
+reterminal:
+
 esphome:
-  # reterminal/ (directory) is copied into the build; reterminal.h is the
-  # umbrella the lambdas use
-  includes:
-    - components/reterminal/src/reterminal
-    - components/reterminal/src/reterminal.h
   # Arduino bundled libs for the HA fetch + SD stack. Since 2026.7 the core
   # builds as an IDF component with selective compilation, and these names
   # switch the libraries on (core 3.x renamed WiFiClientSecure to

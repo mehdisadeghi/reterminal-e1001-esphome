@@ -12,7 +12,7 @@ font:
   # zodiac symbols for the calendar page (U+2648-2653) — neither Inter nor
   # Vazirmatn carries them; DejaVu Sans does, and only these 12 glyphs are
   # compiled in. Language-independent (a symbol is the i18n).
-  - file: "reterminal-e1001/dejavusans.ttf"
+  - file: "${font_dir}/dejavusans.ttf"
     id: font_zodiac
     size: 170
     glyphs: ["♈", "♉", "♊", "♋", "♌", "♍", "♎", "♏", "♐", "♑", "♒", "♓"]
@@ -50,31 +50,31 @@ font:
     glyphs: *glyphs
 
   # Persian set
-  - file: "reterminal-e1001/vazirmatn.ttf"
+  - file: "${font_dir}/vazirmatn.ttf"
     id: fa_tiny
     size: 16
     glyphs: &fa_glyphs !include ../fa_ui_glyphs.yaml
-  - file: "reterminal-e1001/vazirmatn.ttf"
+  - file: "${font_dir}/vazirmatn.ttf"
     id: fa_small
     size: 20
     glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
+  - file: "${font_dir}/vazirmatn.ttf"
     id: fa_smallb
     size: 20
     glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
+  - file: "${font_dir}/vazirmatn.ttf"
     id: fa_medium
     size: 32
     glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
+  - file: "${font_dir}/vazirmatn.ttf"
     id: fa_large
     size: 48
     glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
+  - file: "${font_dir}/vazirmatn.ttf"
     id: fa_time
     size: 56
     glyphs: *fa_glyphs
-  - file: "reterminal-e1001/vazirmatn.ttf"
+  - file: "${font_dir}/vazirmatn.ttf"
     id: fa_huge
     size: 88
     glyphs: *fa_glyphs

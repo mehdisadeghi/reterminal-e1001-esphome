@@ -5,7 +5,14 @@
 esp32:
   board: esp32-s3-devkitc-1
   flash_size: 32MB
-  partitions: reterminal-e1001/partitions.csv
+  # ESPHome lays out the rest (two OTA app slots); a partition file would
+  # not travel with a remote package
+  partitions:
+    # history snapshots, found by name
+    - name: hist
+      type: data
+      subtype: 0x40
+      size: 0x1800000
   framework:
     type: arduino
     advanced:
