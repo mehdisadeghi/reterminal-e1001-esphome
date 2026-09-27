@@ -27,7 +27,7 @@ font:
 interval:
   # Enter sleep a short grace after the last activity, once no command
   # script is mid-flight. Keeping the device up is the HA-queued
-  # input_boolean.${helper_prefix}_keep_awake, delivered on wake like "Press".
+  # input_boolean.<unit>_keep_awake, delivered on wake like "Press".
   - interval: 1s
     then:
       - if:
@@ -553,13 +553,12 @@ script:
       - lambda: 'reterminal::rollback_confirm();'
 
 binary_sensor:
-  # HA-queued keep-awake: create a Toggle helper with entity id
-  # input_boolean.${helper_prefix}_keep_awake. Its state is delivered as soon as
-  # the device wakes; while on, the device does not go back to sleep.
-  # Turn it off (device is awake and receives it immediately) to resume.
-  - platform: homeassistant
+  # HA-queued keep-awake: input_boolean.<unit>_keep_awake, subscribed in
+  # on_boot. Its state is delivered as soon as the device wakes; while on,
+  # the device does not go back to sleep. Turn it off (device is awake and
+  # receives it immediately) to resume.
+  - platform: template
     id: keep_awake
-    entity_id: input_boolean.${helper_prefix}_keep_awake
     on_press:
       then:
         - script.execute: beep_short

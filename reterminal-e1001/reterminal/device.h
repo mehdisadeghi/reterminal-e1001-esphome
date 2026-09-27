@@ -10,6 +10,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <sys/time.h>
+#include <algorithm>
 #include <string>
 #include "esp_attr.h"
 #include "esp_ota_ops.h"
@@ -74,6 +75,14 @@ inline void bump_interact() {
 }
 
 inline bool sleep_due() { return !ota_in_progress && millis() > sleep_deadline; }
+
+// One build serves every unit, so a unit's HA helpers are named after its
+// MAC-suffixed hostname; entity ids take no dashes.
+inline std::string helper_id(const char *domain, const char *suffix) {
+  std::string name = esphome::App.get_name().str();
+  std::replace(name.begin(), name.end(), '-', '_');
+  return std::string(domain) + "." + name + "_" + suffix;
+}
 
 // Display cadence: one config drives both the deep-sleep wake interval and
 // the redraw interval while the device is held awake (keep-awake / pause).

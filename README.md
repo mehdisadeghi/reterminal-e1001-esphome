@@ -25,8 +25,8 @@ exists.
 
 | File | Purpose |
 |------|---------|
-| `esphome-reterminal-e1001.yaml` | Main config: substitutions, packages, boot orchestration |
-| `reterminal-e1001/packages/*.yaml` | Config split by concern: hardware, network, controls, app |
+| `esphome-reterminal-e1001.yaml` | Main config: identity substitutions and packages; the ESPHome Builder copies it per unit on adoption |
+| `reterminal-e1001/packages/*.yaml` | Config split by concern: core (includes, boot), hardware, network, controls, app |
 | `reterminal-e1001/reterminal.h` | Umbrella include used by the lambdas |
 | `reterminal-e1001/reterminal/pure.h` | Host-testable logic: parsers, calendars, timezone math |
 | `reterminal-e1001/reterminal/device.h` | RTC state, sleep, REST access, snapshots, SD stack |
@@ -45,41 +45,41 @@ exists.
 | `tools/gen_tzdata.py` | Regenerates both from upstream tzdata (`uv run tools/gen_tzdata.py`) |
 | `tools/validate_config.py` | Host-side `config.json` validator — mirrors the firmware's acceptance rules, cross-checks IANA names against `tzdata.csv` |
 | `tools/set_datetime.py` | Stamps a fresh one-shot `set_time` into `config.json` for air-gapped clock setting |
-| `ha-helpers.yaml` | HA package creating the three queued-control helpers (Press, Keep Awake, Config Queue) |
+| `ha-helpers.yaml` | Per-unit HA package template for the three queued-control helpers (Press, Keep Awake, Config Queue) |
+| `secrets.yaml.example` | Template for the gitignored `secrets.yaml` the build needs |
+| `commissioning.md` | Bringing a new unit into service: USB flash, Wi-Fi, HA, helpers, updates |
 | `docs/adr/` | Architecture Decision Records — why the design choices were made, and what would make us revisit them |
 | `sd-config-design.md` | Air-gapped SD-card configuration & firmware update: design + implementation notes |
 | `config.json.example` | Template for the SD `config.json` |
-| `Makefile` | `build` / `deploy` / `release` / `test` (see below) |
-| `tools/release.py` | Drives the Device Builder's compile + OTA through HA's ingress proxy |
+| `Makefile` | `build` / `flash` / `deploy` / `helpers` / `logs` / `test` (see below) |
 
-Only the main YAML and the `reterminal-e1001/` directory go to the
-ESPHome builder folder (`make deploy`); everything project-specific lives
-in that subfolder so the builder sees exactly one device.
+The repository holds only the generic firmware and examples. Everything
+specific to one installation stays outside it: `secrets.yaml`, an
+untracked `GNUmakefile` for the HA host and ssh user, the dial photos,
+and each unit's runtime configuration, which lives on the unit and is
+managed from HA.
 
-## Build, deploy, release (Makefile)
+## Build, flash, deploy (Makefile)
 
-- `make deploy` — tar-over-ssh copy of the file set to `/config/esphome`
-  on the HA host (`HOST=`/`USER=` overridable); the host's `secrets.yaml`
-  is never touched. Build and deploy both regenerate the baked-in dial
-  photos (`gen-images`, from `$(IMAGES)`, default repo root — per-unit
-  sets are just directories: `make release DEVICE=x IMAGES=photos/x`) and
-  the version stamp (`gen-version`, `git describe` → visible in HA and on
-  the device's debug page).
-- `make release` — deploy, then the Device Builder compiles and
-  OTA-installs. The builder is ingress-only (no TCP port, its listener
-  accepts only the supervisor), so `release.py` mints an ingress session
-  over HA's websocket API with the deployed `ha_api_token` (non-admin
-  suffices) and drives the builder's compile/upload endpoints through
-  `http://<ha>:8123`, streaming the build log. The add-on is discovered
-  via the supervisor (`BUILDER=auto`; pass a slug to skip). The OTA
-  retries for ~5 min — wake the device or switch on the keep-awake
-  helper. One release at a time: the builder's job runner cancels a
-  running compile when another upload job starts. HA's own firmware
-  update entity is *not* used — it is version-gated and never notices
-  YAML-only changes.
-- `make build` — local compile (pinned `ESPHOME_VERSION`, matching the
-  builder; needs the real `secrets.yaml` beside the yaml since its values
-  are baked in), producing the app image for the SD firmware update.
+- `make build` — local compile (pinned `ESPHOME_VERSION`; needs
+  `secrets.yaml` beside the yaml, since its values are baked in),
+  producing the app image for the SD firmware update. Regenerates the
+  baked-in dial photos (`gen-images`, from `$(IMAGES)`, default repo
+  root) and the version stamp (`gen-version`, `git describe` → visible
+  in HA and on the debug page).
+- `make flash PORT=/dev/cu.usbserial-…` — first install of a unit over
+  USB (see `commissioning.md`).
+- `make deploy` — tar-over-ssh copy of the main yaml and the shared
+  tree, generated files included, into `/config/esphome` on the HA host
+  (`HOST=`/`USER=`); the host's `secrets.yaml` is never touched. The
+  ESPHome Builder then lists every adopted unit, and **Install** or
+  **Update All** there flashes them — a unit must be awake, so switch on
+  its Keep Awake helper first. The main yaml itself shows up in the
+  Builder too, as the template for flashing new units.
+- `make helpers UNIT=reterminal-e1001-a1b2c3` — install that unit's
+  helper package on the HA host.
+- `make logs UNIT=… | PORT=…` — one unit's log, over the API while it is
+  awake or from USB.
 - `make test` — host unit tests + `config.json.example` validation.
 
 ## Pages
@@ -183,20 +183,21 @@ entity is an *event* over the live API connection: with the device asleep
 it fails immediately ("Authenticated connection not ready yet") and HA
 does not retry. A helper is pure HA-side *state*; the device subscribes to
 it and receives the current state at every sync — that persistence is the
-"queue". Create all three at once by installing `ha-helpers.yaml` as an HA
-package: it goes to `<ha config>/packages/reterminal.yaml` (NOT into the
-ESPHome builder folder — the builder treats every YAML there as a device
-config and errors). Note they can never appear on the device page or its
+"queue". The helpers carry the unit's name, which it takes from its MAC
+(`reterminal-e1001-a1b2c3` → `reterminal_e1001_a1b2c3`), so every unit
+runs the same config, and the ids are subscribed at runtime. `make helpers
+UNIT=<name>` installs a unit's three from the `ha-helpers.yaml` template
+as `<ha config>/packages/<unit>.yaml`. Note they can never appear on the device page or its
 ⋮ → Helpers filter — input helpers cannot be linked to a device in HA's
 registry — so pin them to a dashboard card next to the reTerminal's
 controls, and optionally assign them the device's Area:
 
-- `input_button.reterminal_e1001_press` ("Press") — one beep on the next
+- `input_button.<unit>_press` ("Press") — one beep on the next
   wake; multiple presses collapse. The "awake now" signal.
-- `input_boolean.reterminal_e1001_keep_awake` — while on, the device
+- `input_boolean.<unit>_keep_awake` — while on, the device
   stays awake (beeps once when it receives it). Turn off to resume
   sleeping.
-- `input_text.reterminal_e1001_config` — semicolon-separated config
+- `input_text.<unit>_config` — semicolon-separated config
   changes, e.g. `zone3=Asia/Dubai;show7=off;night=19-7;col1=Device=dev`.
   Keys: `zone1..zone5` and `col1..col3` (spec or empty),
   `home=IANA_NAME`, `night=F-T`, `start=N`, `sync=MIN`, `refresh=MIN`,
@@ -208,7 +209,6 @@ controls, and optionally assign them the device's Area:
   perform Home Assistant actions" in the ESPHome integration's device
   settings; without it the same set re-applies on every sync (harmless,
   but the ack never comes).
-  (Each device has its own helper trio via `helper_prefix`.)
 
 ## Zones are data, not code
 
@@ -336,14 +336,19 @@ harmless.
 
 ## Secrets (`secrets.yaml` next to the config)
 
+Copy `secrets.yaml.example`; every value is baked into the build:
+
 ```yaml
-ap_password: "..."             # fallback hotspot (Wi-Fi itself is provisioned
-                               # via captive portal / improv, stored in NVS)
 ota_password: "..."
 api_encryption_key: "..."      # openssl rand -base64 32
-ha_http_ip: "192.168.x.x"      # HA LAN IP (firewall pinhole target)
+ha_http_ip: "192.0.2.10"       # HA LAN IP (firewall pinhole target)
 ha_api_token: "..."            # long-lived token of a dedicated NON-ADMIN HA user
 ```
+
+The Builder compiles with the HA host's `/config/esphome/secrets.yaml`,
+which needs the same keys. Wi-Fi is provisioned at runtime too (captive portal or Improv); the
+fallback hotspot is open, since it only appears while the unit has no
+working Wi-Fi.
 
 ## SD card (air-gapped configuration)
 
@@ -377,13 +382,13 @@ trust anchor). Pre-flight either transport with
 
 - **The first install of a partition-table change (this build) must go
   over USB** — OTA cannot rewrite the partition table. Subsequent updates
-  OTA (`make release`) or go via the SD card.
-- OTA only while awake: `make release` retries the upload for ~5 min —
-  press a button or switch on the keep-awake helper within that window.
-- Before updating the Device Builder add-on, compile locally against the
-  new version first (`make build ESPHOME_VERSION=<next>`) — framework
-  migrations (like 2026.7's Arduino-as-IDF-component) surface there
-  instead of breaking the release path.
+  go through the ESPHome Builder or the SD card.
+- Updates reach only awake units: switch on the unit's Keep Awake helper
+  (it takes effect on the next HA sync, or at once with a green press),
+  install, then switch it off.
+- Before bumping `ESPHOME_VERSION`, compile against the new version
+  first (`make build ESPHOME_VERSION=<next>`) — framework migrations
+  (like 2026.7's Arduino-as-IDF-component) surface there.
 - Reflash/power loss clears RTC memory; graphs repopulate on the next
   fetch (or in device-only mode, refill at one sample per wake).
 - The 7-day view needs HA recorder retention ≥ 7 days (default 10).

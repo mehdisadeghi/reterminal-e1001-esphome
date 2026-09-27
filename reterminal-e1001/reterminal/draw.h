@@ -980,6 +980,8 @@ inline void draw_debug(Display &it, float batt_v, float batt_pct, bool sd_presen
     snprintf(rows[n][1], sizeof(rows[n][1]), "%s", val);
     n++;
   };
+  // the name its HA helpers carry (make helpers UNIT=...)
+  put("Unit", esphome::App.get_name().c_str());
 #ifdef ESPHOME_PROJECT_VERSION
   put("Firmware", ESPHOME_PROJECT_VERSION);
 #else

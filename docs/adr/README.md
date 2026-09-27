@@ -20,3 +20,4 @@ see [`sd-config-design.md`](../../sd-config-design.md).
 | [0005](0005-debug-page-as-session.md) | The debug page is a bounded diagnostic session | Accepted |
 | [0006](0006-on-device-rasterization.md) | Status-bar type is rasterized on the device | Accepted |
 | [0007](0007-battery-gauge-outside-grid.md) | The battery gauge is a column outside the grid | Accepted |
+| [0008](0008-one-config-adopted-per-unit.md) | One config, adopted per unit in the ESPHome Builder | Accepted |

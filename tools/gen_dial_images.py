@@ -9,8 +9,8 @@ segment, lowercased: Europe/Berlin -> berlin.png) becomes a pre-adjusted
 grayscale square in reterminal-e1001/reterminal/dial_images.h. The device
 scales and dithers it to the dial's radius at draw time (dial_image.h).
 
-The directory comes from argv[1], default repo root — per-unit photo sets
-are just different directories: make release DEVICE=x IMAGES=photos/x.
+The directory comes from argv[1], default repo root (make IMAGES=dir).
+The set is shared by every unit; a unit's own faces come from its SD card.
 """
 
 import sys

@@ -36,7 +36,7 @@ text:
     id: zone_3
     optimistic: true
     restore_value: true
-    initial_value: "Memphis=America/Chicago"
+    initial_value: "Asia/Hong_Kong"
     max_length: 96
     mode: text
     entity_category: config
@@ -48,7 +48,7 @@ text:
     id: zone_4
     optimistic: true
     restore_value: true
-    initial_value: "America/Mexico_City"
+    initial_value: "Brooklyn=America/New_York"
     max_length: 96
     mode: text
     entity_category: config
@@ -60,7 +60,7 @@ text:
     id: zone_5
     optimistic: true
     restore_value: true
-    initial_value: "America/Vancouver"
+    initial_value: "America/Sao_Paulo"
     max_length: 96
     mode: text
     entity_category: config
@@ -399,7 +399,7 @@ button:
 switch:
   # Pause deep sleep while tinkering. RAM only (ALWAYS_OFF): any reset or
   # power cycle re-enables deep sleep. The HA-queued keep-awake helper
-  # (input_boolean.<helper_prefix>_keep_awake) serves the same purpose
+  # (input_boolean.<unit>_keep_awake) serves the same purpose
   # while asleep.
   - platform: template
     name: "Pause Sleep (while awake)"

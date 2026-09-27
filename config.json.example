@@ -32,28 +32,10 @@
     { "label": "Outdoor", "source": "sensor.outdoor_temperature,sensor.outdoor_humidity" }
   ],
   "zones": [
-    { "city": "Tehran", "std_offset_min": 210, "enabled": true },
-    {
-      "city": "Berlin",
-      "std_offset_min": 60,
-      "dst_offset_min": 120,
-      "dst_start": { "month": 3, "week": 5, "hour": 2 },
-      "dst_end": { "month": 10, "week": 5, "hour": 3 }
-    },
-    {
-      "city": "Memphis",
-      "std_offset_min": -360,
-      "dst_offset_min": -300,
-      "dst_start": { "month": 3, "week": 2, "hour": 2 },
-      "dst_end": { "month": 11, "week": 1, "hour": 2 }
-    },
-    { "city": "Mexico City", "std_offset_min": -360 },
-    {
-      "city": "Vancouver",
-      "std_offset_min": -480,
-      "dst_offset_min": -420,
-      "dst_start": { "month": 3, "week": 2, "hour": 2 },
-      "dst_end": { "month": 11, "week": 1, "hour": 2 }
-    }
+    { "tz": "Europe/Berlin", "enabled": true },
+    { "tz": "Asia/Tehran" },
+    { "tz": "Asia/Hong_Kong" },
+    { "tz": "America/New_York", "label": "Brooklyn" },
+    { "city": "Sao Paulo", "std_offset_min": -180 }
   ]
 }

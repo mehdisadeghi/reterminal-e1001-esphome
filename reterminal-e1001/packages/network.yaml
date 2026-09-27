@@ -1,14 +1,16 @@
 # reTerminal E1001 — network package (merged by packages: in the main yaml)
 
 text_sensor:
-  # "Press" queue: create an HA Button helper named "Press" with entity id
-  # input_button.${helper_prefix}_press. Its state is the timestamp of its last
-  # press, so pressing it while the device sleeps is queued (any number of
-  # presses collapse into the latest timestamp) and delivered on the next
-  # wake — one beep signals "awake now, ready to interact".
-  - platform: homeassistant
+  # The three HA-queued helpers are named after the unit at runtime and
+  # subscribed in on_boot (reterminal::helper_id); these entities only
+  # carry the delivered state into the automations below.
+  #
+  # "Press" queue: input_button.<unit>_press. Its state is the timestamp of
+  # its last press, so pressing it while the device sleeps is queued (any
+  # number of presses collapse into the latest timestamp) and delivered on
+  # the next wake — one beep signals "awake now, ready to interact".
+  - platform: template
     id: beep_request
-    entity_id: input_button.${helper_prefix}_press
     on_value:
       then:
         - lambda: |-
@@ -28,17 +30,16 @@ text_sensor:
               reterminal::bump_interact();
             }
 
-  # HA-queued config channel: create a Text helper with entity id
-  # input_text.${helper_prefix}_config. Write semicolon-separated changes, e.g.
+  # HA-queued config channel: input_text.<unit>_config. Write
+  # semicolon-separated changes, e.g.
   #   zone3=Asia/Dubai;show7=off;night=19-7;col1=Device=dev
   # Keys: zone1..zone5 (spec or empty), col1..col3 (spec or empty), home,
   # night=F-T, start=N, sync=MIN, cycle/showN=on|off. Applied on wake (or
   # instantly while awake), then the helper is cleared as the
   # acknowledgement — requires "allow the device to perform Home Assistant
   # actions" in the ESPHome integration settings.
-  - platform: homeassistant
+  - platform: template
     id: config_queue
-    entity_id: input_text.${helper_prefix}_config
     on_value:
       then:
         - if:
@@ -51,7 +52,7 @@ text_sensor:
               - homeassistant.action:
                   action: input_text.set_value
                   data:
-                    entity_id: input_text.${helper_prefix}_config
+                    entity_id: !lambda 'return reterminal::helper_id("input_text", "config");'
                     value: ""
               - script.execute: beep_short
 
@@ -77,6 +78,8 @@ time:
 api:
   encryption:
     key: !secret api_encryption_key
+  # the helpers are subscribed from C++ (their ids exist only at runtime)
+  homeassistant_states: true
 
 # OTA (Over-The-Air) firmware update / 空中固件更新
 ota:
@@ -103,9 +106,10 @@ ota:
 # via the fallback hotspot's captive portal, or over USB with Improv
 # (the device builder's "Set up Wi-Fi credentials" menu).
 wifi:
+  # Open on purpose: it only appears while the unit has no working Wi-Fi,
+  # and a password published with the firmware would protect nothing
   ap:
     ssid: "${ap_ssid}"
-    password: !secret ap_password
 
 captive_portal:
 
