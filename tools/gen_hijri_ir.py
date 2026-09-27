@@ -20,7 +20,7 @@ URL = ("https://raw.githubusercontent.com/persian-calendar/calendar/main/"
        "IranianIslamicDateConverter.kt")
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "reterminal-e1001" / "reterminal" / "hijri_ir.h"
+OUT = ROOT / "components" / "reterminal" / "src" / "reterminal" / "hijri_ir.h"
 
 src = (Path(sys.argv[1]).read_text() if len(sys.argv) > 1
        else urllib.request.urlopen(URL).read().decode())

@@ -6,7 +6,7 @@
 
 Every <city>.png in the images directory (city = a zone's last IANA
 segment, lowercased: Europe/Berlin -> berlin.png) becomes a pre-adjusted
-grayscale square in reterminal-e1001/reterminal/dial_images.h. The device
+grayscale square in components/reterminal/src/reterminal/dial_images.h. The device
 scales and dithers it to the dial's radius at draw time (dial_image.h).
 
 The directory comes from argv[1], default repo root (make IMAGES=dir).
@@ -20,7 +20,7 @@ from PIL import Image, ImageEnhance, ImageOps
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT
-OUT = ROOT / "reterminal-e1001" / "reterminal" / "dial_images.h"
+OUT = ROOT / "components" / "reterminal" / "src" / "reterminal" / "dial_images.h"
 MAX_SIDE = 394  # single-dial diameter (R=197), the largest a face can render
 
 srcs = []

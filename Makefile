@@ -71,6 +71,6 @@ logs:
 
 # Host-side checks: pure-logic unit tests + example config validation
 test:
-	c++ -std=c++17 -DRETERMINAL_HOST_TEST -I reterminal-e1001/reterminal tests/host_test.cpp -o /tmp/rt_test
+	c++ -std=c++17 -DRETERMINAL_HOST_TEST -I components/reterminal/src/reterminal tests/host_test.cpp -o /tmp/rt_test
 	/tmp/rt_test
 	uv run tools/validate_config.py config.json.example

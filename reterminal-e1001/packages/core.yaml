@@ -5,8 +5,8 @@ esphome:
   # reterminal/ (directory) is copied into the build; reterminal.h is the
   # umbrella the lambdas use
   includes:
-    - reterminal-e1001/reterminal
-    - reterminal-e1001/reterminal.h
+    - components/reterminal/src/reterminal
+    - components/reterminal/src/reterminal.h
   # Arduino bundled libs for the HA fetch + SD stack. Since 2026.7 the core
   # builds as an IDF component with selective compilation, and these names
   # switch the libraries on (core 3.x renamed WiFiClientSecure to

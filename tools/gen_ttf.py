@@ -10,7 +10,7 @@ Only the glyphs the UI can actually draw are kept, and the shaping tables
 go: Persian is pre-shaped into presentation forms by gen_fa_strings.py, so
 GSUB/GPOS would never be consulted. Emits:
 
-    reterminal-e1001/reterminal/ttf_data.h   subset faces as byte arrays
+    components/reterminal/src/reterminal/ttf_data.h   subset faces as byte arrays
 
 Run from the repo root: `uv run tools/gen_ttf.py`.
 """
@@ -75,6 +75,6 @@ for name, path, glyph_list in FACES:
     out.append("")
 out.append("}  // namespace reterminal")
 
-dest = "reterminal-e1001/reterminal/ttf_data.h"
+dest = "components/reterminal/src/reterminal/ttf_data.h"
 open(dest, "w", encoding="utf-8").write("\n".join(out) + "\n")
 print(f"-> {dest} ({total / 1024:.1f} KB of outlines)")
