@@ -38,7 +38,8 @@ FACES = [
 
 
 def subset(path, chars):
-    font = TTFont(path)
+    # keep the source timestamp: a regenerated header must not dirty the tree
+    font = TTFont(path, recalcTimestamp=False)
     opts = Options()
     opts.layout_features = []          # text arrives pre-shaped
     opts.drop_tables += ["GSUB", "GPOS", "GDEF", "kern", "morx", "DSIG"]
