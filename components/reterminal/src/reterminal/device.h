@@ -384,6 +384,27 @@ inline void tick_data(float dev_t, float dev_h) {
       continue;
     if (std::isnan(dev_t) || std::isnan(dev_h))
       continue;
+    // A wake interval can cross several buckets (15-min wakes vs the 24 h
+    // window's 7.5-min buckets). roll_rows only clears what has shifted,
+    // so every skipped bucket would stay a hole. Carry the previous
+    // sample across the tail exactly like a fetched row forward-fills:
+    // the last known value is filled up to the bucket the new reading
+    // opens, and the fresh sample lands in its last slot.
+    for (int m = 0; m < 2; m++) {
+      float carry = last_val[i][m];
+      if (std::isnan(carry))
+        continue;
+      int16_t *rows[2] = {series_day[i][m], series_week[i][m]};
+      for (int16_t *row : rows) {
+        int last = POINTS - 1;
+        while (last >= 0 && row[last] == PT_NAN)
+          last--;
+        if (last < 0)
+          continue;  // nothing to anchor the carry to (fresh/wiped row)
+        for (int p = last + 1; p < POINTS; p++)
+          row[p] = pt_set(carry);
+      }
+    }
     series_day[i][M_TEMP][POINTS - 1] = pt_set(dev_t);
     series_day[i][M_HUM][POINTS - 1] = pt_set(dev_h);
     series_week[i][M_TEMP][POINTS - 1] = pt_set(dev_t);

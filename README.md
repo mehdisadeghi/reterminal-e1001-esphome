@@ -390,7 +390,8 @@ trust anchor). Pre-flight either transport with
   first (`make build ESPHOME_VERSION=<next>`) — framework migrations
   (like 2026.7's Arduino-as-IDF-component) surface there.
 - Reflash/power loss clears RTC memory; graphs repopulate on the next
-  fetch (or in device-only mode, refill at one sample per wake).
+  fetch (or in device-only mode, refill at one sample per wake, with the
+  previous sample carried across the buckets a wake interval skips).
 - The 7-day view needs HA recorder retention ≥ 7 days (default 10).
 - The device must be added to HA's ESPHome integration manually by IP —
   discovery rarely catches a sleeping device.
